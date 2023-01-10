@@ -15,8 +15,11 @@
 
 void run();
 void cmdcreatefile(char *input);
-bool createFile(char *fileName);
-void createDir(const char *dirName);
+void cmdcat(char *input);
+bool cat(char *fileName);
+bool createFileAndDirs(char *fileName);
+bool createFile(const char *fileName);
+void createAllDirs(const char *dirName);
 bool directoryExists(const char *path);
 void inputLine(char *str);
 void copyStringRange(char *dest, const char *source, int start, int end);
@@ -28,12 +31,6 @@ void printSplittedWords(char (*words)[MAX_WORD_LENGTH], int strCount);
 
 int main()
 {
-    // char str[] = "createfile";
-    // // strtok(str, "-");
-    // // strtok(NULL, "-");
-    // // strtok(NULL, "-");
-    // char *argumentContent = strtok(str, "-");
-    // printf("|%s|\n", argumentContent);
     run();
 }
 
@@ -51,6 +48,8 @@ void run()
             break;
         else if (strcmp(command, "createfile") == 0)
             cmdcreatefile(input);
+        else if (strcmp(command, "cat") == 0)
+            cmdcat(input);
     }
     free(input);
 }
@@ -89,25 +88,105 @@ void cmdcreatefile(char *input)
             }
             copyStringRange(path, argumentContent, fisrtIndex + 1, lastIndex);
         }
-        createFile(path);
+        createFileAndDirs(path);
     }
+    else
+        printf("Invalid argument\n");
 }
 
-bool createFile(char *fileName)
+void cmdcat(char *input)
+{
+    // strtok's first output is the command which we dont need
+    strtok(input, "-");
+    char *argumentContent = strtok(NULL, "-");
+    if (argumentContent == NULL)
+    {
+        printf("Type -file and continue with the path\n");
+        return;
+    }
+    char argumentName[MAX_ARGUMENTNAME_LENGTH];
+    copyNthWord(argumentName, argumentContent, 1);
+    if (strcmp(argumentName, "file") == 0)
+    {
+        char path[MAX_PATH_LENGTH];
+        if (copyNthWord(path, argumentContent, 2) == false)
+        {
+            printf("Type the path after -file\n");
+            return;
+        }
+        if (path[0] == '"')
+        {
+            int fisrtIndex, lastIndex;
+            char *comma = strchr(argumentContent, '"');
+            fisrtIndex = (int)(comma - argumentContent);
+            comma = strrchr(argumentContent, '"');
+            lastIndex = (int)(comma - argumentContent);
+            if (fisrtIndex == lastIndex || fisrtIndex == lastIndex - 1)
+            {
+                printf("Invalid path input\n");
+                return;
+            }
+            if (argumentContent[lastIndex + 1] != ' ' && argumentContent[lastIndex + 1] != '\0')
+            {
+                printf("Invalid path input\n");
+                return;
+            }
+            copyStringRange(path, argumentContent, fisrtIndex + 1, lastIndex);
+        }
+        cat(path);
+    }
+    else
+        printf("Invalid argument\n");
+}
+
+bool cat(char *fileName)
 {
     fixPathString(fileName);
-    createDir(fileName);
-    if (access(fileName, F_OK) == 0)
-        printf("File already exists\n");
+    if (access(fileName, R_OK) == -1)
+    {
+        printf("Cant read the file\n");
+        return false;
+    }
     else
     {
         FILE *fp;
-        fp = fopen(fileName, "w");
-        fclose(fp);
+        fp = fopen("sal.txt", "r");
+        if (fp == NULL)
+            return false;
+        char str[400];
+        while (1)
+        {
+            if (fscanf(fp, "%s", str) == -1)
+                break;
+            printf("%s\n", str);
+        }
     }
 }
 
-void createDir(const char *dirName)
+bool createFileAndDirs(char *fileName)
+{
+    fixPathString(fileName);
+    createAllDirs(fileName);
+    if (access(fileName, F_OK) == 0)
+    {
+        printf("File already exists\n");
+        return false;
+    }
+    else
+        return createFile(fileName);
+}
+
+bool createFile(const char *fileName)
+{
+    FILE *fp;
+    fp = fopen(fileName, "w");
+    if (fp == NULL)
+        return false;
+    fclose(fp);
+    return true;
+}
+
+void createAllDirs(const char *dirName)
 {
     char pathToMake[MAX_PATH_LENGTH];
     for (int i = 0; dirName[i] != '\0'; i++)
@@ -115,7 +194,7 @@ void createDir(const char *dirName)
         if (dirName[i] == '/')
         {
             pathToMake[i] = '\0';
-            if(!directoryExists(pathToMake))
+            if (!directoryExists(pathToMake))
                 mkdir(pathToMake);
         }
         pathToMake[i] = dirName[i];
