@@ -7,24 +7,31 @@
 #include <unistd.h>
 #include <sys/stat.h>
 
-#define MAX_LINE_LENGTH 200
+#define MAX_CMD_LINE_LENGTH 200
 #define MAX_WORD_LENGTH 100
 #define MAX_WORD_IN_LINE 10
 #define MAX_PATH_LENGTH 200
+#define MAX_FILE_LINE_LENGTH 1000
+#define MAX_INSERT_LENGHT 5000
 #define MAX_ARGUMENTNAME_LENGTH 10
 
 void run();
 void cmdcreatefile(char *input);
+void cmdInsert(char *input);
 void cmdcat(char *input);
 bool cat(char *fileName);
+bool insertText(char *fileName, char *text, int linePos, int charPos);
 bool createFileAndDirs(char *fileName);
 bool createFile(const char *fileName);
 void createAllDirs(const char *dirName);
 bool directoryExists(const char *path);
 void inputLine(char *str);
+bool handleDoubleQuotationInput(const char *argumentContent, char *argument);
 void copyStringRange(char *dest, const char *source, int start, int end);
 bool copyNthWord(char *dest, const char *str, int n);
 void spaceSplit(char (*words)[MAX_WORD_LENGTH], const char *str);
+void makeBoolArrayZero(bool *arr, int n);
+bool checkBoolArray(bool *arr, int n);
 void makeArrayInitialsZero(char (*words)[MAX_WORD_LENGTH]);
 void fixPathString(char *path);
 void printSplittedWords(char (*words)[MAX_WORD_LENGTH], int strCount);
@@ -36,9 +43,7 @@ int main()
 
 void run()
 {
-
-    char(*splittedWords)[MAX_WORD_LENGTH] = (char(*)[MAX_WORD_LENGTH])malloc(MAX_WORD_IN_LINE * sizeof(char[MAX_WORD_LENGTH]));
-    char *input = (char *)malloc(MAX_LINE_LENGTH * sizeof(char));
+    char *input = (char *)malloc(MAX_CMD_LINE_LENGTH * sizeof(char));
     char command[20];
     while (1)
     {
@@ -48,6 +53,8 @@ void run()
             break;
         else if (strcmp(command, "createfile") == 0)
             cmdcreatefile(input);
+        else if (strcmp(command, "insertstr") == 0)
+            cmdInsert(input);
         else if (strcmp(command, "cat") == 0)
             cmdcat(input);
     }
@@ -75,23 +82,77 @@ void cmdcreatefile(char *input)
             return;
         }
         if (path[0] == '"')
-        {
-            int fisrtIndex, lastIndex;
-            char *comma = strchr(argumentContent, '"');
-            fisrtIndex = (int)(comma - argumentContent);
-            comma = strrchr(argumentContent, '"');
-            lastIndex = (int)(comma - argumentContent);
-            if (fisrtIndex == lastIndex || (argumentContent[lastIndex + 1] != ' ' && argumentContent[lastIndex + 1] != '\0'))
-            {
-                printf("Invalid path input\n");
-                return;
-            }
-            copyStringRange(path, argumentContent, fisrtIndex + 1, lastIndex);
-        }
-        createFileAndDirs(path);
+            if(handleDoubleQuotationInput(argumentContent, path) == false)
+                    return;
+        if (createFileAndDirs(path) == false)
+            return;
     }
     else
         printf("Invalid argument\n");
+}
+
+void cmdInsert(char *input)
+{
+    // strtok's first output is the command which we dont need
+    strtok(input, "-");
+    bool argumentChecklist[3];
+    makeBoolArrayZero(argumentChecklist, 3);
+    char *argumentContent;
+    char path[MAX_PATH_LENGTH];
+    char textToInsert[MAX_INSERT_LENGHT];
+    int linePos, charPos;
+
+    for (int i = 0; i < 3; i++)
+    {
+        argumentContent = strtok(NULL, "-");
+        if (argumentContent == NULL)
+        {
+            printf("Type the arguments after -\n");
+            return;
+        }
+        char argumentName[MAX_ARGUMENTNAME_LENGTH];
+        copyNthWord(argumentName, argumentContent, 1);
+        if (strcmp(argumentName, "file") == 0 && argumentChecklist[0] == false)
+        {
+            if (copyNthWord(path, argumentContent, 2) == false)
+            {
+                printf("Type the path after -file\n");
+                return;
+            }
+            if (path[0] == '"')
+                if(handleDoubleQuotationInput(argumentContent, path) == false)
+                    return;
+            argumentChecklist[0] = true;
+        }
+        else if (strcmp(argumentName, "str") == 0 && argumentChecklist[1] == false)
+        {
+            if (copyNthWord(textToInsert, argumentContent, 2) == false)
+            {
+                printf("Type the text after -str\n");
+                return;
+            }
+            if (textToInsert[0] == '"')
+                if(handleDoubleQuotationInput(argumentContent, textToInsert) == false)
+                    return;
+            argumentChecklist[1] = true;
+        }
+        else if (strcmp(argumentName, "pos") == 0 && argumentChecklist[2] == false)
+        {
+            if(sscanf(argumentContent, "pos %d:%d", &linePos, &charPos) != 2)
+            {
+                printf("Type the position properly after -pos\n");
+                return;
+            }
+            argumentChecklist[2] = true;
+        }
+        else
+        {
+            printf("Invalid input\n", i);
+            return;
+        }
+    }
+    if(checkBoolArray(argumentChecklist, 3))
+        insertText(path, textToInsert, linePos, charPos);
 }
 
 void cmdcat(char *input)
@@ -115,25 +176,10 @@ void cmdcat(char *input)
             return;
         }
         if (path[0] == '"')
-        {
-            int fisrtIndex, lastIndex;
-            char *comma = strchr(argumentContent, '"');
-            fisrtIndex = (int)(comma - argumentContent);
-            comma = strrchr(argumentContent, '"');
-            lastIndex = (int)(comma - argumentContent);
-            if (fisrtIndex == lastIndex || fisrtIndex == lastIndex - 1)
-            {
-                printf("Invalid path input\n");
+            if(handleDoubleQuotationInput(argumentContent, path) == false)
                 return;
-            }
-            if (argumentContent[lastIndex + 1] != ' ' && argumentContent[lastIndex + 1] != '\0')
-            {
-                printf("Invalid path input\n");
-                return;
-            }
-            copyStringRange(path, argumentContent, fisrtIndex + 1, lastIndex);
-        }
-        cat(path);
+        if (cat(path) == false)
+            return;
     }
     else
         printf("Invalid argument\n");
@@ -144,23 +190,36 @@ bool cat(char *fileName)
     fixPathString(fileName);
     if (access(fileName, R_OK) == -1)
     {
-        printf("Cant read the file\n");
+        printf("File doesn't exist\n");
         return false;
     }
-    else
+    FILE *fp;
+    fp = fopen(fileName, "r");
+    if (fp == NULL)
     {
-        FILE *fp;
-        fp = fopen("sal.txt", "r");
-        if (fp == NULL)
-            return false;
-        char str[400];
-        while (1)
-        {
-            if (fscanf(fp, "%s", str) == -1)
-                break;
-            printf("%s\n", str);
-        }
+        printf("Error occured while reading the file\n");
+        return false;
     }
+    char c;
+    int lineNum = 1;
+    printf("%d  >", lineNum++);
+    while ((c = fgetc(fp)) != EOF)
+    {
+        if (c == '\n')
+        {
+            printf("\n%d  >", lineNum++);
+            continue;
+        }
+        printf("%c", c);
+    }
+    printf("\n");
+    fclose(fp);
+    return true;
+}
+
+bool insertText(char *fileName, char *text, int linePos, int charPos)
+{
+    return true;
 }
 
 bool createFileAndDirs(char *fileName)
@@ -172,8 +231,7 @@ bool createFileAndDirs(char *fileName)
         printf("File already exists\n");
         return false;
     }
-    else
-        return createFile(fileName);
+    return createFile(fileName);
 }
 
 bool createFile(const char *fileName)
@@ -181,7 +239,10 @@ bool createFile(const char *fileName)
     FILE *fp;
     fp = fopen(fileName, "w");
     if (fp == NULL)
+    {
+        printf("Error occured while creating the file\n");
         return false;
+    }
     fclose(fp);
     return true;
 }
@@ -214,12 +275,33 @@ void inputLine(char *str)
     char c;
     int inputIndex = 0;
     c = getchar();
-    while (c != '\n' && c != EOF && inputIndex != MAX_LINE_LENGTH)
+    while (c != '\n' && c != EOF && inputIndex != MAX_CMD_LINE_LENGTH)
     {
         str[inputIndex++] = c;
         c = getchar();
     }
     str[inputIndex] = '\0';
+}
+
+bool handleDoubleQuotationInput(const char *argumentContent, char *argument)
+{
+    int fisrtIndex, lastIndex;
+    char *comma = strchr(argumentContent, '"');
+    fisrtIndex = (int)(comma - argumentContent);
+    comma = strrchr(argumentContent, '"');
+    lastIndex = (int)(comma - argumentContent);
+    if (fisrtIndex == lastIndex || fisrtIndex == lastIndex - 1)
+    {
+        printf("Invalid path input\n");
+        return false;
+    }
+    if (argumentContent[lastIndex + 1] != ' ' && argumentContent[lastIndex + 1] != '\0')
+    {
+        printf("Invalid path input\n");
+        return false;
+    }
+    copyStringRange(argument, argumentContent, fisrtIndex + 1, lastIndex);
+    return true;
 }
 
 void copyStringRange(char *dest, const char *source, int start, int end)
@@ -280,6 +362,20 @@ void spaceSplit(char (*words)[MAX_WORD_LENGTH], const char *str)
         }
         words[wordIndex][charIndex++] = str[i];
     }
+}
+
+void makeBoolArrayZero(bool *arr, int n)
+{
+    for (int i = 0; i < n; i++)
+        arr[i] = false;
+}
+
+bool checkBoolArray(bool *arr, int n)
+{
+    for (int i = 0; i < n; i++)
+        if(arr[i] == false)
+            return false;
+    return true;
 }
 
 void makeArrayInitialsZero(char (*words)[MAX_WORD_LENGTH])
