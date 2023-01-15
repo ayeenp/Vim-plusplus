@@ -13,7 +13,9 @@
 #define MAX_PATH_LENGTH 200
 #define MAX_FILE_LINE_LENGTH 1000
 #define MAX_INSERT_LENGHT 5000
+#define MAX_POS_LENGHT 10
 #define MAX_ARGUMENTNAME_LENGTH 10
+#define TEMP_ADDRESS "TMP"
 
 void run();
 void cmdcreatefile(char *input);
@@ -21,20 +23,20 @@ void cmdInsert(char *input);
 void cmdcat(char *input);
 bool cat(char *fileName);
 bool insertText(char *fileName, char *text, int linePos, int charPos);
+bool writeNlines(int n, FILE *tempptr, FILE *sourceptr);
+bool writeNchars(int n, bool isEOF, FILE *tempptr, FILE *sourceptr);
+void writeStrToFile(char *text, bool isEOL, FILE *tempptr, FILE *sourceptr);
 bool createFileAndDirs(char *fileName);
 bool createFile(const char *fileName);
 void createAllDirs(const char *dirName);
 bool directoryExists(const char *path);
 void inputLine(char *str);
-bool handleDoubleQuotationInput(const char *argumentContent, char *argument);
+bool handleDoubleQuotation(char *str);
+bool removeDoubleQuotations(char *str);
+int findMatchingWord(const char *str, const char *match);
 void copyStringRange(char *dest, const char *source, int start, int end);
 bool copyNthWord(char *dest, const char *str, int n);
-void spaceSplit(char (*words)[MAX_WORD_LENGTH], const char *str);
-void makeBoolArrayZero(bool *arr, int n);
-bool checkBoolArray(bool *arr, int n);
-void makeArrayInitialsZero(char (*words)[MAX_WORD_LENGTH]);
 void fixPathString(char *path);
-void printSplittedWords(char (*words)[MAX_WORD_LENGTH], int strCount);
 
 int main()
 {
@@ -63,126 +65,74 @@ void run()
 
 void cmdcreatefile(char *input)
 {
-    // strtok's first output is the command which we dont need
-    strtok(input, "-");
-    char *argumentContent = strtok(NULL, "-");
-    if (argumentContent == NULL)
+    int arg1 = findMatchingWord(input, "--file");
+    if (arg1 == -1)
     {
-        printf("Type -file and continue with the path\n");
+        printf("Required: --file\n");
         return;
     }
-    char argumentName[MAX_ARGUMENTNAME_LENGTH];
-    copyNthWord(argumentName, argumentContent, 1);
-    if (strcmp(argumentName, "file") == 0)
+    char fileName[MAX_PATH_LENGTH];
+    copyStringRange(fileName, input, arg1 + 1, -1);
+    if (!handleDoubleQuotation(fileName))
     {
-        char path[MAX_PATH_LENGTH];
-        if (copyNthWord(path, argumentContent, 2) == false)
-        {
-            printf("Type the path after -file\n");
-            return;
-        }
-        if (path[0] == '"')
-            if(handleDoubleQuotationInput(argumentContent, path) == false)
-                    return;
-        if (createFileAndDirs(path) == false)
-            return;
+        printf("Invalid path input\n");
+        return;
     }
-    else
-        printf("Invalid argument\n");
+    createFileAndDirs(fileName);
 }
 
 void cmdInsert(char *input)
 {
-    // strtok's first output is the command which we dont need
-    strtok(input, "-");
-    bool argumentChecklist[3];
-    makeBoolArrayZero(argumentChecklist, 3);
-    char *argumentContent;
     char path[MAX_PATH_LENGTH];
     char textToInsert[MAX_INSERT_LENGHT];
+    char pos[MAX_POS_LENGHT];
     int linePos, charPos;
 
-    for (int i = 0; i < 3; i++)
+    int arg1 = findMatchingWord(input, "--file");
+    int arg2 = findMatchingWord(input, "--str");
+    int arg3 = findMatchingWord(input, "-pos");
+    if (arg1 == -1 || arg2 == -1 || arg3 == -1)
     {
-        argumentContent = strtok(NULL, "-");
-        if (argumentContent == NULL)
-        {
-            printf("Type the arguments after -\n");
-            return;
-        }
-        char argumentName[MAX_ARGUMENTNAME_LENGTH];
-        copyNthWord(argumentName, argumentContent, 1);
-        if (strcmp(argumentName, "file") == 0 && argumentChecklist[0] == false)
-        {
-            if (copyNthWord(path, argumentContent, 2) == false)
-            {
-                printf("Type the path after -file\n");
-                return;
-            }
-            if (path[0] == '"')
-                if(handleDoubleQuotationInput(argumentContent, path) == false)
-                    return;
-            argumentChecklist[0] = true;
-        }
-        else if (strcmp(argumentName, "str") == 0 && argumentChecklist[1] == false)
-        {
-            if (copyNthWord(textToInsert, argumentContent, 2) == false)
-            {
-                printf("Type the text after -str\n");
-                return;
-            }
-            if (textToInsert[0] == '"')
-                if(handleDoubleQuotationInput(argumentContent, textToInsert) == false)
-                    return;
-            argumentChecklist[1] = true;
-        }
-        else if (strcmp(argumentName, "pos") == 0 && argumentChecklist[2] == false)
-        {
-            if(sscanf(argumentContent, "pos %d:%d", &linePos, &charPos) != 2)
-            {
-                printf("Type the position properly after -pos\n");
-                return;
-            }
-            argumentChecklist[2] = true;
-        }
-        else
-        {
-            printf("Invalid input\n", i);
-            return;
-        }
+        printf("Required: --file, --str, -pos\n");
+        return;
     }
-    if(checkBoolArray(argumentChecklist, 3))
-        insertText(path, textToInsert, linePos, charPos);
+    copyStringRange(path, input, arg1 + 1, arg2 - 6);
+    copyStringRange(textToInsert, input, arg2 + 1, arg3 - 5);
+    copyStringRange(pos, input, arg3 + 1, -1);
+    if (!handleDoubleQuotation(path))
+    {
+        printf("Invalid path input\n");
+        return;
+    }
+    if (!handleDoubleQuotation(textToInsert))
+    {
+        printf("Invalid text input\n");
+        return;
+    }
+    if (sscanf(pos, "%d:%d", &linePos, &charPos) != 2)
+    {
+        printf("Type the position properly after -pos\n");
+        return;
+    }
+    insertText(path, textToInsert, linePos, charPos);
 }
 
 void cmdcat(char *input)
 {
-    // strtok's first output is the command which we dont need
-    strtok(input, "-");
-    char *argumentContent = strtok(NULL, "-");
-    if (argumentContent == NULL)
+    int arg1 = findMatchingWord(input, "--file");
+    if (arg1 == -1)
     {
-        printf("Type -file and continue with the path\n");
+        printf("Required: --file\n");
         return;
     }
-    char argumentName[MAX_ARGUMENTNAME_LENGTH];
-    copyNthWord(argumentName, argumentContent, 1);
-    if (strcmp(argumentName, "file") == 0)
+    char fileName[MAX_PATH_LENGTH];
+    copyStringRange(fileName, input, arg1 + 1, -1);
+    if (!handleDoubleQuotation(fileName))
     {
-        char path[MAX_PATH_LENGTH];
-        if (copyNthWord(path, argumentContent, 2) == false)
-        {
-            printf("Type the path after -file\n");
-            return;
-        }
-        if (path[0] == '"')
-            if(handleDoubleQuotationInput(argumentContent, path) == false)
-                return;
-        if (cat(path) == false)
-            return;
+        printf("Invalid path input\n");
+        return;
     }
-    else
-        printf("Invalid argument\n");
+    cat(fileName);
 }
 
 bool cat(char *fileName)
@@ -219,7 +169,130 @@ bool cat(char *fileName)
 
 bool insertText(char *fileName, char *text, int linePos, int charPos)
 {
+    FILE *sourceptr = fopen(fileName, "r");
+    if (sourceptr == NULL)
+    {
+        printf("File doesn't exist\n");
+        return false;
+    }
+    FILE *tempptr = fopen(TEMP_ADDRESS, "w");
+    char c;
+    // writing first lines
+    bool isEOF = writeNlines(linePos, tempptr, sourceptr);
+    // writing first chars in the line
+    bool isEOL = writeNchars(charPos, isEOF, tempptr, sourceptr);
+    // writing the string being inserted
+    writeStrToFile(text, isEOL, tempptr, sourceptr);
+    // writing the rest of the file
+    while ((c = fgetc(sourceptr)) != EOF)
+    {
+        fprintf(tempptr, "%c", c);
+    }
+    fclose(tempptr);
+    fclose(sourceptr);
+    if (remove(fileName) != 0)
+    {
+        printf("Couldn't compelete the insertion (can't remove the source file)\n");
+        return false;
+    }
+    if (rename(TEMP_ADDRESS, fileName) != 0)
+    {
+        printf("Couldn't compelete the insertion (can't rename the temp file)\n");
+        return false;
+    }
     return true;
+}
+
+bool writeNlines(int n, FILE *tempptr, FILE *sourceptr)
+{
+    char c;
+    int lineCounter = 1;
+    bool isEOF = false;
+    while (lineCounter != n)
+    {
+        if (isEOF)
+        {
+            fprintf(tempptr, "\n");
+            lineCounter++;
+            continue;
+        }
+        while (1)
+        {
+            c = fgetc(sourceptr);
+            if (c == EOF)
+            {
+                isEOF = true;
+                break;
+            }
+            if (c == '\n')
+            {
+                lineCounter++;
+                break;
+            }
+            fprintf(tempptr, "%c", c);
+        }
+        if (!isEOF)
+            fprintf(tempptr, "\n");
+    }
+    return isEOF;
+}
+
+bool writeNchars(int n, bool isEOF, FILE *tempptr, FILE *sourceptr)
+{
+    char c;
+    bool isEOL = false;
+    int charCounter = 0;
+    while (charCounter != n)
+    {
+        if (isEOF || isEOL)
+        {
+            fprintf(tempptr, " ");
+            charCounter++;
+            continue;
+        }
+        c = fgetc(sourceptr);
+        if (c == EOF)
+        {
+            isEOF = true;
+            continue;
+        }
+        if (c == '\n')
+        {
+            isEOL = true;
+            continue;
+        }
+        fprintf(tempptr, "%c", c);
+        charCounter++;
+    }
+}
+
+void writeStrToFile(char *text, bool isEOL, FILE *tempptr, FILE *sourceptr)
+{
+    bool backSlashMode = false;
+    for (int i = 0; text[i] != '\0'; i++)
+    {
+        if (backSlashMode)
+        {
+            if (text[i] == '\\')
+            {
+                fprintf(tempptr, "\\");
+            }
+            else if (text[i] == 'n')
+            {
+                fprintf(tempptr, "\n");
+            }
+            backSlashMode = false;
+            continue;
+        }
+        if (text[i] == '\\')
+        {
+            backSlashMode = true;
+            continue;
+        }
+        fprintf(tempptr, "%c", text[i]);
+    }
+    if (isEOL)
+        fprintf(tempptr, "\n");
 }
 
 bool createFileAndDirs(char *fileName)
@@ -283,29 +356,59 @@ void inputLine(char *str)
     str[inputIndex] = '\0';
 }
 
-bool handleDoubleQuotationInput(const char *argumentContent, char *argument)
+bool handleDoubleQuotation(char *str)
 {
-    int fisrtIndex, lastIndex;
-    char *comma = strchr(argumentContent, '"');
-    fisrtIndex = (int)(comma - argumentContent);
-    comma = strrchr(argumentContent, '"');
-    lastIndex = (int)(comma - argumentContent);
-    if (fisrtIndex == lastIndex || fisrtIndex == lastIndex - 1)
-    {
-        printf("Invalid path input\n");
+    if (!removeDoubleQuotations(str) && strchr(str, ' ') != NULL)
         return false;
-    }
-    if (argumentContent[lastIndex + 1] != ' ' && argumentContent[lastIndex + 1] != '\0')
-    {
-        printf("Invalid path input\n");
-        return false;
-    }
-    copyStringRange(argument, argumentContent, fisrtIndex + 1, lastIndex);
     return true;
+}
+
+bool removeDoubleQuotations(char *str)
+{
+    if (str[0] != '"' || str[strlen(str) - 1] != '"')
+        return false;
+    for (int i = 0; 1; i++)
+    {
+        str[i] = str[i + 1];
+        if (str[i] == '\0')
+        {
+            str[i - 1] = '\0';
+            break;
+        }
+    }
+    return true;
+}
+
+int findMatchingWord(const char *str, const char *match)
+{
+    int matchIndex = 0;
+    for (int i = 0; str[i] != '\0'; i++)
+    {
+        if (str[i] == match[matchIndex])
+        {
+            matchIndex++;
+            if (match[matchIndex] == '\0')
+                return i + 1;
+        }
+        else
+        {
+            matchIndex = 0;
+            if (str[i] == match[matchIndex])
+                matchIndex++;
+        }
+    }
+    return -1;
 }
 
 void copyStringRange(char *dest, const char *source, int start, int end)
 {
+    if (end == -1)
+        end = MAX_INSERT_LENGHT;
+    if (start >= end)
+    {
+        printf("copyStringRange start greater than end\n");
+        return;
+    }
     int destIndex = 0;
     for (int i = start; i < end && source[i] != '\0'; i++)
         dest[destIndex++] = source[i];
@@ -342,48 +445,6 @@ bool copyNthWord(char *dest, const char *str, int n)
     return true;
 }
 
-void spaceSplit(char (*words)[MAX_WORD_LENGTH], const char *str)
-{
-    int wordIndex = 0, charIndex = 0;
-    makeArrayInitialsZero(words);
-    for (int i = 0; wordIndex < MAX_WORD_IN_LINE; i++)
-    {
-        if (str[i] == ' ')
-        {
-            words[wordIndex][charIndex++] = '\0';
-            wordIndex++;
-            charIndex = 0;
-            continue;
-        }
-        if (str[i] == '\0')
-        {
-            words[wordIndex][charIndex++] = '\0';
-            return;
-        }
-        words[wordIndex][charIndex++] = str[i];
-    }
-}
-
-void makeBoolArrayZero(bool *arr, int n)
-{
-    for (int i = 0; i < n; i++)
-        arr[i] = false;
-}
-
-bool checkBoolArray(bool *arr, int n)
-{
-    for (int i = 0; i < n; i++)
-        if(arr[i] == false)
-            return false;
-    return true;
-}
-
-void makeArrayInitialsZero(char (*words)[MAX_WORD_LENGTH])
-{
-    for (int i = 0; i < MAX_WORD_IN_LINE; i++)
-        words[i][0] = '\0';
-}
-
 void fixPathString(char *path)
 {
     if (path[0] != '/')
@@ -398,10 +459,4 @@ void fixPathString(char *path)
             break;
         }
     }
-}
-
-void printSplittedWords(char (*words)[MAX_WORD_LENGTH], int strCount)
-{
-    for (int i = 0; i < strCount; i++)
-        printf("%d :%s\n", i, words[i]);
 }

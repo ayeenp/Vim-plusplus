@@ -1,3 +1,4 @@
 root
 *.exe
 *.txt
+tst.c
