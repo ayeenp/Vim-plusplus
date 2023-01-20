@@ -16,23 +16,26 @@
 #define MAX_STREAM_LENGTH 10000
 #define MAX_INT_LENGTH 10
 #define MAX_ARGUMENTNAME_LENGTH 10
-#define TEMP_ADDRESS "TMP"
+#define TEMP_ADDRESS "root/.TMP"
+#define CMD_REM 1
+#define CMD_COPY 2
+#define CMD_CUT 3
 
 void run();
 void cmdCreatefile(char *input);
 void cmdInsert(char *input);
-void cmdRemove(char *input);
-void cmdCopy(char *input);
+void cmdRemCopyCut(char *input, int mode);
 void cmdCat(char *input);
 bool cat(char *fileName);
 bool insertText(char *fileName, char *text, int linePos, int charPos);
 bool removeText(char *fileName, int linePos, int charPos, int size, bool isForward);
 bool copyFileContentToClipboard(char *fileName, int linePos, int charPos, int size, bool isForward);
+bool cutFileContentToClipboard(char *fileName, int linePos, int charPos, int size, bool isForward);
 void copyStrToClipboard(const char *str);
 void readAndWriteNlines(int n, FILE *tempptr, FILE *sourceptr);
 bool readAndWriteNchars(int n, FILE *tempptr, FILE *sourceptr);
 bool seekNlines(int n, FILE *sourceptr);
-bool seekNchars(int n, FILE *sourceptr);
+bool seekNchars(int n, bool isForward, FILE *sourceptr);
 void writeStrToFile(char *text, bool isEOL, FILE *tempptr, FILE *sourceptr);
 bool createFileAndDirs(char *fileName);
 bool createFile(const char *fileName);
@@ -48,6 +51,7 @@ void fixPathString(char *path);
 
 int main()
 {
+
     // FILE *fp = fopen("root/tmp.txt", "w+");
     // FILE *fpr = fopen("root/a.txt", "r");
     // for (int i = 0; i < 5; i++)
@@ -63,7 +67,7 @@ int main()
     // fprintf(fp, "salam\nabcd");
     // fseek(fp, +2, SEEK_CUR);
     // fprintf(fp, "PLKJ\ndwais\nsaxn");
-    // fclose(fp);
+    // fclose(fpr);
     run();
 }
 
@@ -82,9 +86,11 @@ void run()
         else if (strcmp(command, "insertstr") == 0)
             cmdInsert(input);
         else if (strcmp(command, "removestr") == 0)
-            cmdRemove(input);
+            cmdRemCopyCut(input, CMD_REM);
         else if (strcmp(command, "copystr") == 0)
-            cmdCopy(input);
+            cmdRemCopyCut(input, CMD_COPY);
+        else if (strcmp(command, "cutstr") == 0)
+            cmdRemCopyCut(input, CMD_CUT);
         else if (strcmp(command, "cat") == 0)
             cmdCat(input);
     }
@@ -106,6 +112,7 @@ void cmdCreatefile(char *input)
         printf("Invalid path input\n");
         return;
     }
+    fixPathString(fileName);
     createFileAndDirs(fileName);
 }
 
@@ -142,10 +149,11 @@ void cmdInsert(char *input)
         printf("Type the position properly after -pos\n");
         return;
     }
+    fixPathString(path);
     insertText(path, textToInsert, linePos, charPos);
 }
 
-void cmdRemove(char *input)
+void cmdRemCopyCut(char *input, int mode)
 {
     char path[MAX_PATH_LENGTH];
     char pos[MAX_INT_LENGTH];
@@ -176,6 +184,7 @@ void cmdRemove(char *input)
         printf("Invalid path input\n");
         return;
     }
+    fixPathString(path);
     if (sscanf(pos, "%d:%d", &linePos, &charPos) != 2)
     {
         printf("Type the position properly after -pos\n");
@@ -186,51 +195,18 @@ void cmdRemove(char *input)
         printf("Type the size properly after -size\n");
         return;
     }
-    removeText(path, linePos, charPos, size, isForward);
-}
-
-void cmdCopy(char *input)
-{
-    char path[MAX_PATH_LENGTH];
-    char pos[MAX_INT_LENGTH];
-    char sizeStr[MAX_INT_LENGTH];
-    int linePos, charPos, size;
-    bool isForward = true;
-
-    int arg1index = findMatchingWord(input, " --file");
-    int arg2index = findMatchingWord(input, " -pos");
-    int arg3index = findMatchingWord(input, " -size");
-    int arg4index = findMatchingWord(input, " -f");
-    if (arg4index == -1)
+    switch (mode)
     {
-        isForward = false;
-        arg4index = findMatchingWord(input, " -b");
+    case CMD_REM:
+        removeText(path, linePos, charPos, size, isForward);
+        break;
+    case CMD_COPY:
+        copyFileContentToClipboard(path, linePos, charPos, size, isForward);
+        break;
+    case CMD_CUT:
+        cutFileContentToClipboard(path, linePos, charPos, size, isForward);
+        break;
     }
-    if (arg1index == -1 || arg2index == -1 || arg3index == -1 || arg4index == -1)
-    {
-        printf("Required: --file, -pos, -size, -b or -f\n");
-        return;
-    }
-    copyStringRange(path, input, arg1index + 1, arg2index - 5);
-    copyStringRange(pos, input, arg2index + 1, arg3index - 5);
-    copyStringRange(sizeStr, input, arg3index + 1, arg4index - 3);
-
-    if (!handleDoubleQuotation(path))
-    {
-        printf("Invalid path input\n");
-        return;
-    }
-    if (sscanf(pos, "%d:%d", &linePos, &charPos) != 2)
-    {
-        printf("Type the position properly after -pos\n");
-        return;
-    }
-    if (sscanf(sizeStr, "%d", &size) != 1)
-    {
-        printf("Type the size properly after -size\n");
-        return;
-    }
-    copyFileContentToClipboard(path, linePos, charPos, size, isForward);
 }
 
 void cmdCat(char *input)
@@ -248,12 +224,12 @@ void cmdCat(char *input)
         printf("Invalid path input\n");
         return;
     }
+    fixPathString(fileName);
     cat(fileName);
 }
 
 bool cat(char *fileName)
 {
-    fixPathString(fileName);
     if (access(fileName, R_OK) == -1)
     {
         printf("File doesn't exist\n");
@@ -301,9 +277,7 @@ bool insertText(char *fileName, char *text, int linePos, int charPos)
     // writing the rest of the file
     char c;
     while ((c = fgetc(sourceptr)) != EOF)
-    {
         fprintf(tempptr, "%c", c);
-    }
     fclose(tempptr);
     fclose(sourceptr);
     if (remove(fileName) != 0)
@@ -327,15 +301,15 @@ bool removeText(char *fileName, int linePos, int charPos, int size, bool isForwa
         printf("File doesn't exist\n");
         return false;
     }
-    FILE *tempptr = fopen(TEMP_ADDRESS, "w");
+    FILE *tempptr = fopen(TEMP_ADDRESS, "w+");
     // writing first lines
     readAndWriteNlines(linePos, tempptr, sourceptr);
     // writing first chars in the line
     readAndWriteNchars(charPos, tempptr, sourceptr);
     if (!isForward)
-        fseek(tempptr, -1 * size, SEEK_CUR);
+        seekNchars(size, false, tempptr);
     else
-        fseek(sourceptr, size, SEEK_CUR);
+        seekNchars(size, true, sourceptr);
     // writing the rest of the file
     char c;
     while ((c = fgetc(sourceptr)) != EOF)
@@ -351,18 +325,18 @@ bool copyFileContentToClipboard(char *fileName, int linePos, int charPos, int si
 {
     FILE *sourceptr = fopen(fileName, "r");
     char copyingStr[MAX_STREAM_LENGTH];
-    if(!seekNlines(linePos - 1, sourceptr))
+    if (!seekNlines(linePos - 1, sourceptr))
     {
         printf("Line position too big\n");
         return false;
     }
-    if(!seekNchars(charPos, sourceptr))
+    if (!seekNchars(charPos, true, sourceptr))
     {
-        printf("Char position too big\n");
+        printf("Char position invalid\n");
         return false;
     }
     if (!isForward)
-        fseek(sourceptr, -1 * size, SEEK_CUR);
+        seekNchars(size, false, sourceptr);
     char c;
     int i;
     for (i = 0; i < size && (c = fgetc(sourceptr)) != EOF; i++)
@@ -370,6 +344,15 @@ bool copyFileContentToClipboard(char *fileName, int linePos, int charPos, int si
     copyingStr[i] = '\0';
     copyStrToClipboard(copyingStr);
     fclose(sourceptr);
+    return true;
+}
+
+bool cutFileContentToClipboard(char *fileName, int linePos, int charPos, int size, bool isForward)
+{
+    if (!copyFileContentToClipboard(fileName, linePos, charPos, size, isForward))
+        return false;
+    if (!removeText(fileName, linePos, charPos, size, isForward))
+        return false;
     return true;
 }
 
@@ -462,16 +445,33 @@ bool seekNlines(int n, FILE *sourceptr)
     return true;
 }
 
-bool seekNchars(int n, FILE *sourceptr)
+bool seekNchars(int n, bool isForward, FILE *sourceptr)
 {
-    char c;
     int charCounter = 0;
-    while(charCounter != n)
+    char c;
+    if (isForward)
     {
-        c = fgetc(sourceptr);
-        charCounter++;
-        if(c == '\n' || c == EOF)
-            return false;
+        while (charCounter != n)
+        {
+            c = fgetc(sourceptr);
+            charCounter++;
+            if (c == EOF)
+                return false;
+        }
+    }
+    else
+    {
+        while (charCounter != n)
+        {
+            if(fseek(sourceptr, -1, SEEK_CUR) != 0)
+                return false;
+            c = fgetc(sourceptr);
+            if (c == '\n')
+                fseek(sourceptr, -2, SEEK_CUR);
+            else
+                fseek(sourceptr, -1, SEEK_CUR);
+            charCounter++;
+        }
     }
     return true;
 }
@@ -507,7 +507,6 @@ void writeStrToFile(char *text, bool isEOL, FILE *tempptr, FILE *sourceptr)
 
 bool createFileAndDirs(char *fileName)
 {
-    fixPathString(fileName);
     createAllDirs(fileName);
     if (access(fileName, F_OK) == 0)
     {
