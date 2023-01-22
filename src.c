@@ -25,13 +25,16 @@ void run();
 void cmdCreatefile(char *input);
 void cmdInsert(char *input);
 void cmdRemCopyCut(char *input, int mode);
+void cmdPaste(char *input);
 void cmdCat(char *input);
 bool cat(char *fileName);
 bool insertText(char *fileName, char *text, int linePos, int charPos);
 bool removeText(char *fileName, int linePos, int charPos, int size, bool isForward);
 bool copyFileContentToClipboard(char *fileName, int linePos, int charPos, int size, bool isForward);
 bool cutFileContentToClipboard(char *fileName, int linePos, int charPos, int size, bool isForward);
+bool pasteFromClipboard(char *fileName, int linePos, int charPos);
 void copyStrToClipboard(const char *str);
+void retrieveStrFromClipboard(char *str);
 void readAndWriteNlines(int n, FILE *tempptr, FILE *sourceptr);
 bool readAndWriteNchars(int n, FILE *tempptr, FILE *sourceptr);
 bool seekNlines(int n, FILE *sourceptr);
@@ -51,23 +54,6 @@ void fixPathString(char *path);
 
 int main()
 {
-
-    // FILE *fp = fopen("root/tmp.txt", "w+");
-    // FILE *fpr = fopen("root/a.txt", "r");
-    // for (int i = 0; i < 5; i++)
-    // {
-    //     printf("%c", fgetc(fpr));
-    // }
-    // fseek(fpr, -6, SEEK_CUR);
-    // printf("\n");
-    // for (int i = 0; i < 5; i++)
-    // {
-    //     printf("%c", fgetc(fpr));
-    // }
-    // fprintf(fp, "salam\nabcd");
-    // fseek(fp, +2, SEEK_CUR);
-    // fprintf(fp, "PLKJ\ndwais\nsaxn");
-    // fclose(fpr);
     run();
 }
 
@@ -91,6 +77,8 @@ void run()
             cmdRemCopyCut(input, CMD_COPY);
         else if (strcmp(command, "cutstr") == 0)
             cmdRemCopyCut(input, CMD_CUT);
+        else if (strcmp(command, "pastestr") == 0)
+            cmdPaste(input);
         else if (strcmp(command, "cat") == 0)
             cmdCat(input);
     }
@@ -207,6 +195,35 @@ void cmdRemCopyCut(char *input, int mode)
         cutFileContentToClipboard(path, linePos, charPos, size, isForward);
         break;
     }
+}
+
+void cmdPaste(char *input)
+{
+    char path[MAX_PATH_LENGTH];
+    char pos[MAX_INT_LENGTH];
+    int linePos, charPos;
+
+    int arg1index = findMatchingWord(input, " --file");
+    int arg2index = findMatchingWord(input, " -pos");
+    if (arg1index == -1 || arg2index == -1)
+    {
+        printf("Required: --file, -pos\n");
+        return;
+    }
+    copyStringRange(path, input, arg1index + 1, arg2index - 5);
+    copyStringRange(pos, input, arg2index + 1, -1);
+    if (!handleDoubleQuotation(path))
+    {
+        printf("Invalid path input\n");
+        return;
+    }
+    if (sscanf(pos, "%d:%d", &linePos, &charPos) != 2)
+    {
+        printf("Type the position properly after -pos\n");
+        return;
+    }
+    fixPathString(path);
+    pasteFromClipboard(path, linePos, charPos);
 }
 
 void cmdCat(char *input)
@@ -356,6 +373,15 @@ bool cutFileContentToClipboard(char *fileName, int linePos, int charPos, int siz
     return true;
 }
 
+bool pasteFromClipboard(char *fileName, int linePos, int charPos)
+{
+    char clipboardText[MAX_STREAM_LENGTH];
+    retrieveStrFromClipboard(clipboardText);
+    if(!insertText(fileName, clipboardText, linePos, charPos))
+        return false;
+    return true;
+}
+
 void copyStrToClipboard(const char *str)
 {
     const int len = strlen(str) + 1;
@@ -365,6 +391,16 @@ void copyStrToClipboard(const char *str)
     OpenClipboard(0);
     EmptyClipboard();
     SetClipboardData(CF_TEXT, hMem);
+    CloseClipboard();
+}
+
+void retrieveStrFromClipboard(char *str)
+{
+    OpenClipboard(0);
+    HANDLE hClipboardData = GetClipboardData(CF_TEXT);
+    char *pchData = (char *)GlobalLock(hClipboardData);
+    strcpy(str, pchData);
+    GlobalUnlock(hClipboardData);
     CloseClipboard();
 }
 
@@ -463,7 +499,7 @@ bool seekNchars(int n, bool isForward, FILE *sourceptr)
     {
         while (charCounter != n)
         {
-            if(fseek(sourceptr, -1, SEEK_CUR) != 0)
+            if (fseek(sourceptr, -1, SEEK_CUR) != 0)
                 return false;
             c = fgetc(sourceptr);
             if (c == '\n')
@@ -484,13 +520,9 @@ void writeStrToFile(char *text, bool isEOL, FILE *tempptr, FILE *sourceptr)
         if (backSlashMode)
         {
             if (text[i] == '\\')
-            {
                 fprintf(tempptr, "\\");
-            }
             else if (text[i] == 'n')
-            {
                 fprintf(tempptr, "\n");
-            }
             backSlashMode = false;
             continue;
         }
@@ -499,6 +531,8 @@ void writeStrToFile(char *text, bool isEOL, FILE *tempptr, FILE *sourceptr)
             backSlashMode = true;
             continue;
         }
+        if(text[i] == '\r')
+            continue;
         fprintf(tempptr, "%c", text[i]);
     }
     if (isEOL)
