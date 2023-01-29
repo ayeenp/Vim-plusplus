@@ -25,16 +25,21 @@ void run();
 void cmdCreatefile(char *input);
 void cmdInsert(char *input);
 void cmdRemCopyCut(char *input, int mode);
+void cmdFind(char *input);
 void cmdPaste(char *input);
 void cmdCat(char *input);
 bool cat(char *fileName);
 bool insertText(char *fileName, char *text, int linePos, int charPos);
 bool removeText(char *fileName, int linePos, int charPos, int size, bool isForward);
+void find(char *fileName, char *toBeFound, int at, bool isCount, bool isByWord, bool isAll);
+int findAt(const char *fileString, char *toBeFound, int at, bool isByWord, int *size);
 bool copyFileContentToClipboard(char *fileName, int linePos, int charPos, int size, bool isForward);
 bool cutFileContentToClipboard(char *fileName, int linePos, int charPos, int size, bool isForward);
 bool pasteFromClipboard(char *fileName, int linePos, int charPos);
 void copyStrToClipboard(const char *str);
 void retrieveStrFromClipboard(char *str);
+void handleWildCards(char *str, bool *leadingWC, bool *endingWC);
+void handleNewlines(char *str);
 void readAndWriteNlines(int n, FILE *tempptr, FILE *sourceptr);
 bool readAndWriteNchars(int n, FILE *tempptr, FILE *sourceptr);
 bool seekNlines(int n, FILE *sourceptr);
@@ -45,11 +50,14 @@ bool createFile(const char *fileName);
 void createAllDirs(const char *dirName);
 bool directoryExists(const char *path);
 void inputLine(char *str);
+void fileToString(FILE *fp, char *str);
 bool handleDoubleQuotation(char *str);
 bool removeDoubleQuotations(char *str);
 int findMatchingWord(const char *str, const char *match);
+bool findMatchFromIndex(const char *str, const char *match, int startingIndex, bool isForward);
 void copyStringRange(char *dest, const char *source, int start, int end);
 bool copyNthWord(char *dest, const char *str, int n);
+bool findNthWord(const char *str, int n, int *startIndex, int *endIndex);
 void fixPathString(char *path);
 
 int main()
@@ -79,6 +87,8 @@ void run()
             cmdRemCopyCut(input, CMD_CUT);
         else if (strcmp(command, "pastestr") == 0)
             cmdPaste(input);
+        else if (strcmp(command, "find") == 0)
+            cmdFind(input);
         else if (strcmp(command, "cat") == 0)
             cmdCat(input);
     }
@@ -195,6 +205,66 @@ void cmdRemCopyCut(char *input, int mode)
         cutFileContentToClipboard(path, linePos, charPos, size, isForward);
         break;
     }
+}
+
+void cmdFind(char *input)
+{
+    char path[MAX_PATH_LENGTH];
+    char textToBeFound[MAX_STREAM_LENGTH];
+    bool isCount = true, isByword = true, isAll = true;
+    int at = 1;
+    int leastArgIndex = MAX_CMD_LINE_LENGTH;
+    int arg1index = findMatchingWord(input, "--str");
+    int arg2index = findMatchingWord(input, " --file");
+    int arg3index = findMatchingWord(input, " -count");
+    if (arg3index == -1)
+        isCount = false;
+    else
+        leastArgIndex = arg3index - 7;
+    arg3index = findMatchingWord(input, " -at");
+    if (arg3index != -1)
+    {
+        char atstr[MAX_INT_LENGTH];
+        copyStringRange(atstr, input, arg3index + 1, arg3index + 3);
+        if (sscanf(atstr, "%d ", &at) != 1)
+        {
+            printf("Type the number properly after -at\n");
+            return;
+        }
+        if (arg3index <= leastArgIndex)
+            leastArgIndex = arg3index - 4;
+    }
+    arg3index = findMatchingWord(input, " -byword");
+    if (arg3index == -1)
+        isByword = false;
+    else if (arg3index <= leastArgIndex)
+        leastArgIndex = arg3index - 8;
+    arg3index = findMatchingWord(input, " -all");
+    if (arg3index == -1)
+        isAll = false;
+    else if (arg3index <= leastArgIndex)
+        leastArgIndex = arg3index - 5;
+    if (arg1index == -1 || arg2index == -1)
+    {
+        printf("Required: --str, --file\n");
+        return;
+    }
+    if (leastArgIndex == MAX_CMD_LINE_LENGTH)
+        leastArgIndex = -1;
+    copyStringRange(textToBeFound, input, arg1index + 1, arg2index - 7);
+    copyStringRange(path, input, arg2index + 1, leastArgIndex);
+    if (!handleDoubleQuotation(path))
+    {
+        printf("Invalid path input\n");
+        return;
+    }
+    if (!handleDoubleQuotation(textToBeFound))
+    {
+        printf("Invalid text input\n");
+        return;
+    }
+    fixPathString(path);
+    find(path, textToBeFound, at, isCount, isByword, isAll);
 }
 
 void cmdPaste(char *input)
@@ -338,6 +408,87 @@ bool removeText(char *fileName, int linePos, int charPos, int size, bool isForwa
     return true;
 }
 
+void find(char *fileName, char *toBeFound, int at, bool isCount, bool isByWord, bool isAll)
+{
+    if ((isAll && isCount) || (isAll && at != 1) || (isCount && isByWord) || (isCount && at != 1))
+    {
+        printf("Wrong combination of arguments for find\n");
+        return;
+    }
+    if (access(fileName, R_OK) == -1)
+    {
+        printf("File doesn't exist\n");
+        return;
+    }
+    FILE *fp;
+    fp = fopen(fileName, "r");
+    if (fp == NULL)
+    {
+        printf("Error occured while reading the file\n");
+        return;
+    }
+    char fileString[MAX_STREAM_LENGTH];
+    fileToString(fp, fileString);
+    fclose(fp);
+    
+    int size;
+    if (isAll)
+    {
+        while (1)
+        {
+            int index = findAt(fileString, toBeFound, at, isByWord, &size);
+            if (index == -1)
+                break;
+            printf("%d ", index);
+            at++;
+        }
+        printf("\n");
+        return;
+    }
+    if(isCount)
+    {
+        while (1)
+        {
+            int index = findAt(fileString, toBeFound, at, isByWord, &size);
+            if (index == -1)
+                break;
+            at++;
+        }
+        printf("%d\n", at - 1);
+        return;
+    }
+    printf("%d\n", findAt(fileString, toBeFound, at, isByWord, &size));
+    return;
+}
+
+int findAt(const char *fileString, char *toBeFound, int at, bool isByWord, int *size)
+{
+    bool leadingWC = false, endingWC = false;
+    handleWildCards(toBeFound, &leadingWC, &endingWC);
+    handleNewlines(toBeFound);
+
+    int startIndex, endIndex, count = 0;
+    for (int wordCount = 1; 1; wordCount++)
+    {
+        if (!findNthWord(fileString, wordCount, &startIndex, &endIndex))
+            break;
+        for (int i = startIndex; i <= endIndex; i++)
+        {
+            if (!findMatchFromIndex(fileString, toBeFound, i, 1))
+                continue;
+            count++;
+            if (at == count)
+            {
+                if (isByWord)
+                    return wordCount;
+                else
+                    return i;
+            }
+        }
+    }
+    return -1;
+}
+
 bool copyFileContentToClipboard(char *fileName, int linePos, int charPos, int size, bool isForward)
 {
     FILE *sourceptr = fopen(fileName, "r");
@@ -377,7 +528,7 @@ bool pasteFromClipboard(char *fileName, int linePos, int charPos)
 {
     char clipboardText[MAX_STREAM_LENGTH];
     retrieveStrFromClipboard(clipboardText);
-    if(!insertText(fileName, clipboardText, linePos, charPos))
+    if (!insertText(fileName, clipboardText, linePos, charPos))
         return false;
     return true;
 }
@@ -402,6 +553,57 @@ void retrieveStrFromClipboard(char *str)
     strcpy(str, pchData);
     GlobalUnlock(hClipboardData);
     CloseClipboard();
+}
+
+void handleWildCards(char *str, bool *leadingWC, bool *endingWC)
+{
+    if (str[0] == '*')
+    {
+        *leadingWC = true;
+        for (int i = 0; 1; i++)
+        {
+            str[i] = str[i + 1];
+            if (str[i] == '\0')
+                break;
+        }
+    }
+    int length = strlen(str);
+    if (str[length - 1] == '*' && str[length - 2] != '\\')
+    {
+        *endingWC = true;
+        str[length - 1] = '\0';
+    }
+    // clearing the "\*"s
+    for (int i = 0; str[i] != '\0'; i++)
+    {
+        if (str[i] == '\\' && str[i + 1] == '*')
+        {
+            for (int j = i; 1; j++)
+            {
+                str[j] = str[j + 1];
+                if (str[j] == '\0')
+                    break;
+            }
+        }
+    }
+}
+
+void handleNewlines(char *str)
+{
+    for (int i = 0; str[i] != '\0'; i++)
+    {
+        if (str[i] == '\\' && str[i + 1] == 'n')
+        {
+            str[i] = '\n';
+            i++;
+            for (int j = i; 1; j++)
+            {
+                str[j] = str[j + 1];
+                if (str[j] == '\0')
+                    break;
+            }
+        }
+    }
 }
 
 void readAndWriteNlines(int n, FILE *tempptr, FILE *sourceptr)
@@ -531,7 +733,7 @@ void writeStrToFile(char *text, bool isEOL, FILE *tempptr, FILE *sourceptr)
             backSlashMode = true;
             continue;
         }
-        if(text[i] == '\r')
+        if (text[i] == '\r')
             continue;
         fprintf(tempptr, "%c", text[i]);
     }
@@ -599,6 +801,15 @@ void inputLine(char *str)
     str[inputIndex] = '\0';
 }
 
+void fileToString(FILE *fp, char *str)
+{
+    char c;
+    int i = 0;
+    while ((c = fgetc(fp)) != EOF)
+        str[i++] = c;
+    str[i] = '\0';
+}
+
 bool handleDoubleQuotation(char *str)
 {
     if (!removeDoubleQuotations(str) && strchr(str, ' ') != NULL)
@@ -643,6 +854,29 @@ int findMatchingWord(const char *str, const char *match)
     return -1;
 }
 
+bool findMatchFromIndex(const char *str, const char *match, int startingIndex, bool isForward)
+{
+    int matchIndex, iterator = 1;
+    int matchLen = strlen(match);
+    if (isForward)
+        matchIndex = 0;
+    else
+    {
+        iterator = -1;
+        matchIndex = matchLen - 1;
+    }
+    for (int i = startingIndex; matchLen != 0; matchLen--)
+    {
+        if (i == -1 || matchIndex == -1 || match[matchIndex] == '\0' || str[i] == '\0')
+            return false;
+        if (str[i] != match[matchIndex])
+            return false;
+        i += iterator;
+        matchIndex += iterator;
+    }
+    return true;
+}
+
 void copyStringRange(char *dest, const char *source, int start, int end)
 {
     if (end == -1)
@@ -660,31 +894,38 @@ void copyStringRange(char *dest, const char *source, int start, int end)
 
 bool copyNthWord(char *dest, const char *str, int n)
 {
+    int start, end;
+    if (!findNthWord(str, n, &start, &end))
+        return false;
+    copyStringRange(dest, str, start, end + 1);
+    return true;
+}
+
+bool findNthWord(const char *str, int n, int *startIndex, int *endIndex)
+{
     int wordNum = 1;
     int i = 0;
+    while (str[i] == ' ' || str[i] == '\n' || str[i] == '\t')
+        i++;
     while (wordNum < n)
     {
         if (str[i] == '\0')
             return false;
-        if (str[i] == ' ')
+        if (str[i] == ' ' || str[i] == '\n' || str[i] == '\t')
         {
-            while (str[i] == ' ')
-            {
+            while (str[i] == ' ' || str[i] == '\n' || str[i] == '\t')
                 i++;
-            }
             wordNum++;
-            if (str[i] == '\0' || str[i] == '\n')
+            if (str[i] == '\0')
                 return false;
             continue;
         }
         i++;
     }
-    int destIndex = 0;
-    while (str[i] != ' ' && str[i] != '\0' && str[i] != '\n')
-    {
-        dest[destIndex++] = str[i++];
-    }
-    dest[destIndex] = '\0';
+    *startIndex = i;
+    while (str[i] != ' ' && str[i] != '\0' && str[i] != '\n' && str[i] != '\t')
+        i++;
+    *endIndex = i - 1;
     return true;
 }
 
