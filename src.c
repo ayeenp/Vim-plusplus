@@ -8,14 +8,12 @@
 #include <sys/stat.h>
 #include <windows.h>
 
-#define MAX_CMD_LINE_LENGTH 200
-#define MAX_WORD_LENGTH 100
-#define MAX_WORD_IN_LINE 10
+#define MAX_CMD_LINE_LENGTH 400
+#define MAX_GREP_FILECOUNT 50
 #define MAX_PATH_LENGTH 200
-#define MAX_FILE_LINE_LENGTH 1000
 #define MAX_STREAM_LENGTH 50000
+#define MAX_FILE_LINE_LENGTH 1000
 #define MAX_INT_LENGTH 10
-#define MAX_ARGUMENTNAME_LENGTH 10
 #define TEMP_ADDRESS "root/.TMP"
 #define CMD_REM 1
 #define CMD_COPY 2
@@ -23,6 +21,7 @@
 
 void run();
 void cmdCreatefile(char *input);
+void cmdGrep(char *input);
 void cmdInsert(char *input);
 void cmdRemCopyCut(char *input, int mode);
 void cmdFind(char *input);
@@ -32,6 +31,7 @@ void cmdCat(char *input);
 bool cat(char *fileName);
 bool insertText(char *fileName, char *text, int linePos, int charPos, int seekPos);
 bool removeText(char *fileName, int linePos, int charPos, int seekPos, int size, bool isForward);
+void grep(char (*paths)[MAX_PATH_LENGTH], char *toBeFound, bool lMode, bool cMode);
 void find(char *fileName, char *toBeFound, int at, bool isCount, bool isByWord, bool isAll);
 int findMatchCount(char *fileString, char *toBeFound);
 int findAt(const char *fileString, char *toBeFound, int at, bool isByWord, int *foundWordSize);
@@ -44,6 +44,7 @@ void copyStrToClipboard(const char *str);
 void retrieveStrFromClipboard(char *str);
 void handleWildCards(char *str, bool *leadingWC, bool *endingWC);
 void handleNewlines(char *str);
+void splitPaths(const char *str, char (*paths)[MAX_PATH_LENGTH]);
 bool readAndWriteNlines(int n, FILE *tempptr, FILE *sourceptr);
 bool readAndWriteNchars(int n, FILE *tempptr, FILE *sourceptr);
 bool readAndWriteNseeks(int n, FILE *tempptr, FILE *sourceptr);
@@ -55,6 +56,7 @@ bool createFile(const char *fileName);
 void createAllDirs(const char *dirName);
 bool directoryExists(const char *path);
 void inputLine(char *str);
+void inputLineFromFile(FILE *fp, char *str);
 void fileToString(FILE *fp, char *str);
 bool handleDoubleQuotation(char *str);
 bool removeDoubleQuotations(char *str);
@@ -96,6 +98,8 @@ void run()
             cmdFind(input);
         else if (strcmp(command, "replace") == 0)
             cmdReplace(input);
+        else if (strcmp(command, "grep") == 0)
+            cmdGrep(input);
         else if (strcmp(command, "cat") == 0)
             cmdCat(input);
     }
@@ -119,6 +123,35 @@ void cmdCreatefile(char *input)
     }
     fixPathString(fileName);
     createFileAndDirs(fileName);
+}
+
+void cmdGrep(char *input)
+{
+    char textToBeFound[MAX_STREAM_LENGTH];
+    char pathsString[MAX_CMD_LINE_LENGTH];
+    char(*paths)[MAX_PATH_LENGTH] = (char(*)[MAX_PATH_LENGTH])malloc(MAX_GREP_FILECOUNT * sizeof(char[MAX_PATH_LENGTH]));
+    bool lMode = false, cMode = false;
+    if (findMatchingWord(input, "-c") != -1)
+        cMode = true;
+    else if (findMatchingWord(input, "-l") != -1)
+        lMode = true;
+    int arg1index = findMatchingWord(input, " --str");
+    int arg2index = findMatchingWord(input, " --files");
+
+    if (arg1index == -1 || arg2index == -1)
+    {
+        printf("Required: --str, --files\n");
+        return;
+    }
+    copyStringRange(textToBeFound, input, arg1index + 1, arg2index - 8);
+    copyStringRange(pathsString, input, arg2index + 1, -1);
+    if (!handleDoubleQuotation(textToBeFound))
+    {
+        printf("Invalid text input\n");
+        return;
+    }
+    splitPaths(pathsString, paths);
+    grep(paths, textToBeFound, lMode, cMode);
 }
 
 void cmdInsert(char *input)
@@ -499,6 +532,49 @@ bool removeText(char *fileName, int linePos, int charPos, int seekPos, int size,
     return true;
 }
 
+void grep(char (*paths)[MAX_PATH_LENGTH], char *toBeFound, bool lMode, bool cMode)
+{
+    if (lMode && cMode)
+    {
+        printf("-l and -c can't be simultaneously used\n");
+        return;
+    }
+    int matchesFound = 0;
+    for (int fileIndex = 0; paths[fileIndex][0] != '\0'; fileIndex++)
+    {
+        bool foundAMatch = false;
+        FILE *fp;
+        fp = fopen(paths[fileIndex], "r");
+        if (fp == NULL)
+        {
+            printf("File %s doesn't exist\n", paths[fileIndex]);
+            return;
+        }
+        while (!feof(fp))
+        {
+            char currentLine[MAX_FILE_LINE_LENGTH];
+            inputLineFromFile(fp, currentLine);
+            for (int i = 0; currentLine[i] != '\0'; i++)
+            {
+                if (!findMatchFromIndex(currentLine, toBeFound, i, 1))
+                    continue;
+                if (lMode)
+                    foundAMatch = true;
+                else if (!cMode)
+                    printf("%d- %s: %s\n", matchesFound + 1, paths[fileIndex], currentLine);
+                matchesFound++;
+                break;
+            }
+            if (lMode && foundAMatch)
+                break;
+        }
+        if (lMode && foundAMatch)
+            printf("%s\n", paths[fileIndex]);
+    }
+    if (cMode)
+        printf("%d\n", matchesFound);
+}
+
 void find(char *fileName, char *toBeFound, int at, bool isCount, bool isByWord, bool isAll)
 {
     if ((isAll && isCount) || (isAll && at != 1) || (isCount && isByWord) || (isCount && at != 1))
@@ -561,8 +637,9 @@ int findAt(const char *fileString, char *toBeFound, int at, bool isByWord, int *
     bool leadingWC = false, endingWC = false;
     handleWildCards(toBeFound, &leadingWC, &endingWC);
     handleNewlines(toBeFound);
-    if (!leadingWC && !endingWC)
-        *foundWordSize = strlen(toBeFound);
+    // if (!leadingWC && !endingWC)
+    //     *foundWordSize = strlen(toBeFound);
+    *foundWordSize = strlen(toBeFound);
     int startIndex, endIndex, count = 0;
     for (int wordCount = 1; 1; wordCount++)
     {
@@ -756,6 +833,37 @@ void handleNewlines(char *str)
     }
 }
 
+void splitPaths(const char *str, char (*paths)[MAX_PATH_LENGTH])
+{
+    int pathStartIndex = 0, pathEndIndex, pathsIndex = 0;
+    char c;
+    while (1)
+    {
+        if (str[pathStartIndex] == '"')
+        {
+            pathStartIndex++;
+            for (pathEndIndex = pathStartIndex; str[pathEndIndex] != '"'; pathEndIndex++)
+                if (str[pathEndIndex] == '\0')
+                    return;
+            copyStringRange(paths[pathsIndex], str, pathStartIndex, pathEndIndex);
+            fixPathString(paths[pathsIndex]);
+            pathStartIndex = pathEndIndex + 2;
+        }
+        else
+        {
+            for (pathEndIndex = pathStartIndex; str[pathEndIndex] != ' '; pathEndIndex++)
+                if (str[pathEndIndex] == '\0')
+                    break;
+            copyStringRange(paths[pathsIndex], str, pathStartIndex, pathEndIndex);
+            fixPathString(paths[pathsIndex]);
+            pathStartIndex = pathEndIndex + 1;
+        }
+        if (str[pathStartIndex - 1] == '\0')
+            break;
+        pathsIndex++;
+    }
+}
+
 bool readAndWriteNlines(int n, FILE *tempptr, FILE *sourceptr)
 {
     char c;
@@ -940,6 +1048,19 @@ void inputLine(char *str)
     {
         str[inputIndex++] = c;
         c = getchar();
+    }
+    str[inputIndex] = '\0';
+}
+
+void inputLineFromFile(FILE *fp, char *str)
+{
+    char c;
+    int inputIndex = 0;
+    c = fgetc(fp);
+    while (c != '\n' && c != EOF && inputIndex != MAX_FILE_LINE_LENGTH - 1)
+    {
+        str[inputIndex++] = c;
+        c = fgetc(fp);
     }
     str[inputIndex] = '\0';
 }
