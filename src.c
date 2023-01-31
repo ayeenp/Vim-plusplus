@@ -134,7 +134,7 @@ void cmdGrep(char *input)
 {
     char textToBeFound[MAX_STREAM_LENGTH];
     char pathsString[MAX_CMD_LINE_LENGTH];
-    char(*paths)[MAX_PATH_LENGTH] = (char(*)[MAX_PATH_LENGTH]) calloc(MAX_GREP_FILECOUNT, sizeof(char[MAX_PATH_LENGTH]));
+    char(*paths)[MAX_PATH_LENGTH] = (char(*)[MAX_PATH_LENGTH])calloc(MAX_GREP_FILECOUNT, sizeof(char[MAX_PATH_LENGTH]));
     bool lMode = false, cMode = false;
     if (findMatchingWord(input, "-c") != -1)
         cMode = true;
@@ -636,13 +636,14 @@ void find(char *fileName, char *toBeFound, int at, bool isCount, bool isByWord, 
 
 int findMatchCount(char *fileString, char *toBeFound)
 {
-    int size;
-    int matchCount = 1;
-    while (findAt(fileString, toBeFound, matchCount, 0, &size) != -1)
-    {
-        matchCount++;
-    }
-    return matchCount - 1;
+    bool leadingWC = false, endingWC = false;
+    handleWildCards(toBeFound, &leadingWC, &endingWC);
+    handleNewlines(toBeFound);
+    int count = 0;
+    for (int i = 0; fileString[i] != '\0'; i++)
+        if (findMatchFromIndex(fileString, toBeFound, i, 1))
+            count++;
+    return count;
 }
 
 int findAt(const char *fileString, char *toBeFound, int at, bool isByWord, int *foundWordSize)
