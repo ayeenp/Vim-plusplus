@@ -15,6 +15,7 @@
 #define MAX_FILE_LINE_LENGTH 1000
 #define MAX_INT_LENGTH 10
 #define TEMP_ADDRESS "root/.TMP"
+#define UNDO_SUFFIX ".TMP"
 #define CMD_REM 1
 #define CMD_COPY 2
 #define CMD_CUT 3
@@ -35,13 +36,16 @@ void grep(char (*paths)[MAX_PATH_LENGTH], char *toBeFound, bool lMode, bool cMod
 void find(char *fileName, char *toBeFound, int at, bool isCount, bool isByWord, bool isAll);
 int findMatchCount(char *fileString, char *toBeFound);
 int findAt(const char *fileString, char *toBeFound, int at, bool isByWord, int *foundWordSize);
-void replace(char *fileName, char *toBeFound, char *toBeReplaced, int at, bool isAll);
+bool replace(char *fileName, char *toBeFound, char *toBeReplaced, int at, bool isAll);
 bool replaceAt(char *fileName, char *fileString, char *toBeFound, char *toBeReplaced, int at);
 bool copyFileContentToClipboard(char *fileName, int linePos, int charPos, int size, bool isForward);
 bool cutFileContentToClipboard(char *fileName, int linePos, int charPos, int size, bool isForward);
 bool pasteFromClipboard(char *fileName, int linePos, int charPos);
 void copyStrToClipboard(const char *str);
 void retrieveStrFromClipboard(char *str);
+void backupForUndo(const char *fileName);
+int getLastUndoNumber(const char *fileName);
+void generateUndoPath(char *undoPath, const char *fileName, int num);
 void handleWildCards(char *str, bool *leadingWC, bool *endingWC);
 void handleNewlines(char *str);
 void splitPaths(const char *str, char (*paths)[MAX_PATH_LENGTH]);
@@ -51,6 +55,7 @@ bool readAndWriteNseeks(int n, FILE *tempptr, FILE *sourceptr);
 bool seekNlines(int n, FILE *sourceptr);
 bool seekNchars(int n, bool isForward, FILE *sourceptr);
 void writeStrToFile(char *text, FILE *tempptr, FILE *sourceptr);
+bool copyFile(const char *sourceFileName, const char *destFileName);
 bool createFileAndDirs(char *fileName);
 bool createFile(const char *fileName);
 void createAllDirs(const char *dirName);
@@ -152,6 +157,7 @@ void cmdGrep(char *input)
     }
     splitPaths(pathsString, paths);
     grep(paths, textToBeFound, lMode, cMode);
+    free(paths);
 }
 
 void cmdInsert(char *input)
@@ -599,6 +605,17 @@ void find(char *fileName, char *toBeFound, int at, bool isCount, bool isByWord, 
     fclose(fp);
 
     int size;
+    if (isCount)
+    {
+        printf("%d\n", findMatchCount(fileString, toBeFound));
+        return;
+    }
+    int foundPosition = findAt(fileString, toBeFound, at, isByWord, &size);
+    if (foundPosition == -1)
+    {
+        printf("No matches found\n");
+        return;
+    }
     if (isAll)
     {
         while (1)
@@ -612,11 +629,7 @@ void find(char *fileName, char *toBeFound, int at, bool isCount, bool isByWord, 
         printf("\n");
         return;
     }
-    if (isCount)
-    {
-        printf("%d\n", findMatchCount(fileString, toBeFound));
-        return;
-    }
+
     printf("%d\n", findAt(fileString, toBeFound, at, isByWord, &size));
     return;
 }
@@ -662,24 +675,24 @@ int findAt(const char *fileString, char *toBeFound, int at, bool isByWord, int *
     return -1;
 }
 
-void replace(char *fileName, char *toBeFound, char *toBeReplaced, int at, bool isAll)
+bool replace(char *fileName, char *toBeFound, char *toBeReplaced, int at, bool isAll)
 {
     if (isAll && at != 1)
     {
         printf("Wrong combination of arguments for find\n");
-        return;
+        return false;
     }
     if (access(fileName, R_OK) == -1)
     {
         printf("File doesn't exist\n");
-        return;
+        return false;
     }
     FILE *fp;
     fp = fopen(fileName, "r");
     if (fp == NULL)
     {
         printf("Error occured while reading the file\n");
-        return;
+        return false;
     }
     char fileString[MAX_STREAM_LENGTH];
     fileToString(fp, fileString);
@@ -691,18 +704,20 @@ void replace(char *fileName, char *toBeFound, char *toBeReplaced, int at, bool i
         if (matchCount == 0)
         {
             printf("Couldn't find the expression\n");
-            return;
+            return false;
         }
         while (replaceAt(fileName, fileString, toBeFound, toBeReplaced, matchCount))
             matchCount--;
         printf("Successfully replaced all matches\n");
-        return;
+        return true;
     }
     if (!replaceAt(fileName, fileString, toBeFound, toBeReplaced, at))
+    {
         printf("Couldn't find the expression\n");
-    else
-        printf("Successfully replaced\n");
-    return;
+        return false;
+    }
+    printf("Successfully replaced\n");
+    return true;
 }
 
 bool replaceAt(char *fileName, char *fileString, char *toBeFound, char *toBeReplaced, int at)
@@ -780,6 +795,50 @@ void retrieveStrFromClipboard(char *str)
     strcpy(str, pchData);
     GlobalUnlock(hClipboardData);
     CloseClipboard();
+}
+
+void backupForUndo(const char *fileName)
+{
+    char undoPath[MAX_PATH_LENGTH];
+    generateUndoPath(undoPath, fileName, getLastUndoNumber(fileName));
+    copyFile(fileName, undoPath);
+}
+
+int getLastUndoNumber(const char *fileName)
+{
+    int num = 1;
+    for (; num < 100; num++)
+    {
+        char undoPath[MAX_PATH_LENGTH];
+        generateUndoPath(undoPath, fileName, num);
+        printf("%s\n", undoPath);
+        if (access(undoPath, F_OK) != 0)
+            return num;
+    }
+    return 1;
+}
+
+void generateUndoPath(char *undoPath, const char *fileName, int num)
+{
+    undoPath = "\0";
+    num %= 100;
+    char *lastSlashPointer = strrchr(fileName, '/');
+    int lastSlashIndex = -1;
+    if (lastSlashPointer != NULL)
+    {
+        lastSlashIndex = strrchr(fileName, '/') - fileName;
+        copyStringRange(undoPath, fileName, 0, lastSlashIndex + 1);
+    }
+    strcat(undoPath, UNDO_SUFFIX);
+    strcat(undoPath, "_");
+    char pureFileName[MAX_PATH_LENGTH];
+    copyStringRange(pureFileName, fileName, lastSlashIndex + 1, -1);
+    strcat(undoPath, pureFileName);
+    strcat(undoPath, "_");
+    char numStr[3];
+    sprintf(numStr, "%0.2d", num);
+    strcat(undoPath, numStr);
+    fixPathString(undoPath);
 }
 
 void handleWildCards(char *str, bool *leadingWC, bool *endingWC)
@@ -990,6 +1049,33 @@ void writeStrToFile(char *text, FILE *tempptr, FILE *sourceptr)
             continue;
         fprintf(tempptr, "%c", text[i]);
     }
+}
+
+bool copyFile(const char *sourceFileName, const char *destFileName)
+{
+    FILE *sourcePtr;
+    sourcePtr = fopen(sourceFileName, "r");
+    if (sourcePtr == NULL)
+    {
+        printf("Error occured while reading the source file\n");
+        return false;
+    }
+    FILE *destPtr;
+    destPtr = fopen(destFileName, "w");
+    if (destPtr == NULL)
+    {
+        printf("Error occured while creating the destination file\n");
+        return false;
+    }
+    char c = fgetc(sourcePtr);
+    while (c != EOF)
+    {
+        fputc(c, destPtr);
+        c = fgetc(sourcePtr);
+    }
+    fclose(sourcePtr);
+    fclose(destPtr);
+    return true;
 }
 
 bool createFileAndDirs(char *fileName)
