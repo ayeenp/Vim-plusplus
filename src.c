@@ -134,7 +134,7 @@ void cmdGrep(char *input)
 {
     char textToBeFound[MAX_STREAM_LENGTH];
     char pathsString[MAX_CMD_LINE_LENGTH];
-    char(*paths)[MAX_PATH_LENGTH] = (char(*)[MAX_PATH_LENGTH])malloc(MAX_GREP_FILECOUNT * sizeof(char[MAX_PATH_LENGTH]));
+    char(*paths)[MAX_PATH_LENGTH] = (char(*)[MAX_PATH_LENGTH]) calloc(MAX_GREP_FILECOUNT, sizeof(char[MAX_PATH_LENGTH]));
     bool lMode = false, cMode = false;
     if (findMatchingWord(input, "-c") != -1)
         cMode = true;
@@ -797,6 +797,13 @@ void retrieveStrFromClipboard(char *str)
     CloseClipboard();
 }
 
+void deleteLastBackup(const char *fileName)
+{
+    char undoPath[MAX_PATH_LENGTH];
+    generateUndoPath(undoPath, fileName, getLastUndoNumber(fileName) - 1);
+    remove(undoPath);
+}
+
 void backupForUndo(const char *fileName)
 {
     char undoPath[MAX_PATH_LENGTH];
@@ -820,7 +827,7 @@ int getLastUndoNumber(const char *fileName)
 
 void generateUndoPath(char *undoPath, const char *fileName, int num)
 {
-    undoPath = "\0";
+    undoPath = "";
     num %= 100;
     char *lastSlashPointer = strrchr(fileName, '/');
     int lastSlashIndex = -1;
