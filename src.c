@@ -7,15 +7,15 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <windows.h>
+#include <dirent.h>
 
 #define MAX_CMD_LINE_LENGTH 400
 #define MAX_GREP_FILECOUNT 50
-#define MAX_PATH_LENGTH 200
 #define MAX_STREAM_LENGTH 50000
 #define MAX_FILE_LINE_LENGTH 1000
 #define MAX_INT_LENGTH 10
-#define TEMP_ADDRESS "root/.TMP"
-#define UNDO_SUFFIX ".TMP"
+#define TEMP_ADDRESS "root/.VIMTMP"
+#define UNDO_SUFFIX ".VIMTMP"
 #define CMD_REM 1
 #define CMD_COPY 2
 #define CMD_CUT 3
@@ -25,6 +25,7 @@ void cmdCreatefile(char *input);
 void cmdGrep(char *input);
 void cmdInsert(char *input);
 void cmdRemCopyCut(char *input, int mode);
+void cmdUndo(char *input);
 void cmdFind(char *input);
 void cmdReplace(char *input);
 void cmdPaste(char *input);
@@ -32,23 +33,25 @@ void cmdCat(char *input);
 bool cat(char *fileName);
 bool insertText(char *fileName, char *text, int linePos, int charPos, int seekPos);
 bool removeText(char *fileName, int linePos, int charPos, int seekPos, int size, bool isForward);
-void grep(char (*paths)[MAX_PATH_LENGTH], char *toBeFound, bool lMode, bool cMode);
+void grep(char (*paths)[MAX_PATH], char *toBeFound, bool lMode, bool cMode);
 void find(char *fileName, char *toBeFound, int at, bool isCount, bool isByWord, bool isAll);
 int findMatchCount(char *fileString, char *toBeFound);
 int findAt(const char *fileString, char *toBeFound, int at, bool isByWord, int *foundWordSize);
 bool replace(char *fileName, char *toBeFound, char *toBeReplaced, int at, bool isAll);
 bool replaceAt(char *fileName, char *fileString, char *toBeFound, char *toBeReplaced, int at);
+bool undo(char *fileName);
 bool copyFileContentToClipboard(char *fileName, int linePos, int charPos, int size, bool isForward);
 bool cutFileContentToClipboard(char *fileName, int linePos, int charPos, int size, bool isForward);
 bool pasteFromClipboard(char *fileName, int linePos, int charPos);
 void copyStrToClipboard(const char *str);
 void retrieveStrFromClipboard(char *str);
+void deleteLastBackup(const char *fileName);
 void backupForUndo(const char *fileName);
 int getLastUndoNumber(const char *fileName);
 void generateUndoPath(char *undoPath, const char *fileName, int num);
 void handleWildCards(char *str, bool *leadingWC, bool *endingWC);
 void handleNewlines(char *str);
-void splitPaths(const char *str, char (*paths)[MAX_PATH_LENGTH]);
+void splitPaths(const char *str, char (*paths)[MAX_PATH]);
 bool readAndWriteNlines(int n, FILE *tempptr, FILE *sourceptr);
 bool readAndWriteNchars(int n, FILE *tempptr, FILE *sourceptr);
 bool readAndWriteNseeks(int n, FILE *tempptr, FILE *sourceptr);
@@ -60,6 +63,7 @@ bool createFileAndDirs(char *fileName);
 bool createFile(const char *fileName);
 void createAllDirs(const char *dirName);
 bool directoryExists(const char *path);
+void makeFileHidden(const char *fileName);
 void inputLine(char *str);
 void inputLineFromFile(FILE *fp, char *str);
 void fileToString(FILE *fp, char *str);
@@ -97,6 +101,8 @@ void run()
             cmdRemCopyCut(input, CMD_COPY);
         else if (strcmp(command, "cutstr") == 0)
             cmdRemCopyCut(input, CMD_CUT);
+        else if (strcmp(command, "undo") == 0)
+            cmdUndo(input);
         else if (strcmp(command, "pastestr") == 0)
             cmdPaste(input);
         else if (strcmp(command, "find") == 0)
@@ -111,6 +117,10 @@ void run()
     free(input);
 }
 
+void quit()
+{
+}
+
 void cmdCreatefile(char *input)
 {
     int arg1index = findMatchingWord(input, " --file");
@@ -119,7 +129,7 @@ void cmdCreatefile(char *input)
         printf("Required: --file\n");
         return;
     }
-    char fileName[MAX_PATH_LENGTH];
+    char fileName[MAX_PATH];
     copyStringRange(fileName, input, arg1index + 1, -1);
     if (!handleDoubleQuotation(fileName))
     {
@@ -134,7 +144,7 @@ void cmdGrep(char *input)
 {
     char textToBeFound[MAX_STREAM_LENGTH];
     char pathsString[MAX_CMD_LINE_LENGTH];
-    char(*paths)[MAX_PATH_LENGTH] = (char(*)[MAX_PATH_LENGTH])calloc(MAX_GREP_FILECOUNT, sizeof(char[MAX_PATH_LENGTH]));
+    char(*paths)[MAX_PATH] = (char(*)[MAX_PATH])calloc(MAX_GREP_FILECOUNT, sizeof(char[MAX_PATH]));
     bool lMode = false, cMode = false;
     if (findMatchingWord(input, "-c") != -1)
         cMode = true;
@@ -162,7 +172,7 @@ void cmdGrep(char *input)
 
 void cmdInsert(char *input)
 {
-    char path[MAX_PATH_LENGTH];
+    char path[MAX_PATH];
     char textToInsert[MAX_STREAM_LENGTH];
     char pos[MAX_INT_LENGTH];
     int linePos, charPos;
@@ -194,12 +204,14 @@ void cmdInsert(char *input)
         return;
     }
     fixPathString(path);
-    insertText(path, textToInsert, linePos, charPos, -1);
+    backupForUndo(path);
+    if (!insertText(path, textToInsert, linePos, charPos, -1))
+        deleteLastBackup(path);
 }
 
 void cmdRemCopyCut(char *input, int mode)
 {
-    char path[MAX_PATH_LENGTH];
+    char path[MAX_PATH];
     char pos[MAX_INT_LENGTH];
     char sizeStr[MAX_INT_LENGTH];
     int linePos, charPos, size;
@@ -242,20 +254,43 @@ void cmdRemCopyCut(char *input, int mode)
     switch (mode)
     {
     case CMD_REM:
-        removeText(path, linePos, charPos, -1, size, isForward);
+        backupForUndo(path);
+        if (!removeText(path, linePos, charPos, -1, size, isForward))
+            deleteLastBackup(path);
         break;
     case CMD_COPY:
         copyFileContentToClipboard(path, linePos, charPos, size, isForward);
         break;
     case CMD_CUT:
-        cutFileContentToClipboard(path, linePos, charPos, size, isForward);
+        backupForUndo(path);
+        if(!cutFileContentToClipboard(path, linePos, charPos, size, isForward))
+            deleteLastBackup(path);
         break;
     }
 }
 
+void cmdUndo(char *input)
+{
+    int arg1index = findMatchingWord(input, " --file");
+    if (arg1index == -1)
+    {
+        printf("Required: --file\n");
+        return;
+    }
+    char fileName[MAX_PATH];
+    copyStringRange(fileName, input, arg1index + 1, -1);
+    if (!handleDoubleQuotation(fileName))
+    {
+        printf("Invalid path input\n");
+        return;
+    }
+    fixPathString(fileName);
+    undo(fileName);
+}
+
 void cmdFind(char *input)
 {
-    char path[MAX_PATH_LENGTH];
+    char path[MAX_PATH];
     char textToBeFound[MAX_STREAM_LENGTH];
     bool isCount = true, isByword = true, isAll = true;
     int at = 1;
@@ -315,7 +350,7 @@ void cmdFind(char *input)
 
 void cmdReplace(char *input)
 {
-    char path[MAX_PATH_LENGTH];
+    char path[MAX_PATH];
     char textToBeFound[MAX_STREAM_LENGTH];
     char textToBeReplaced[MAX_STREAM_LENGTH];
     bool isAll = true;
@@ -368,12 +403,14 @@ void cmdReplace(char *input)
         return;
     }
     fixPathString(path);
-    replace(path, textToBeFound, textToBeReplaced, at, isAll);
+    backupForUndo(path);
+    if(!replace(path, textToBeFound, textToBeReplaced, at, isAll))
+        deleteLastBackup(path);
 }
 
 void cmdPaste(char *input)
 {
-    char path[MAX_PATH_LENGTH];
+    char path[MAX_PATH];
     char pos[MAX_INT_LENGTH];
     int linePos, charPos;
 
@@ -397,7 +434,9 @@ void cmdPaste(char *input)
         return;
     }
     fixPathString(path);
-    pasteFromClipboard(path, linePos, charPos);
+    backupForUndo(path);
+    if(!pasteFromClipboard(path, linePos, charPos))
+        deleteLastBackup(path);
 }
 
 void cmdCat(char *input)
@@ -408,7 +447,7 @@ void cmdCat(char *input)
         printf("Required: --file\n");
         return;
     }
-    char fileName[MAX_PATH_LENGTH];
+    char fileName[MAX_PATH];
     copyStringRange(fileName, input, arg1index + 1, -1);
     if (!handleDoubleQuotation(fileName))
     {
@@ -465,12 +504,18 @@ bool insertText(char *fileName, char *text, int linePos, int charPos, int seekPo
         if (!readAndWriteNlines(linePos, tempptr, sourceptr))
         {
             printf("Line pos too big.\n");
+            fclose(tempptr);
+            fclose(sourceptr);
+            remove(TEMP_ADDRESS);
             return false;
         }
         // writing first chars in the line
         if (!readAndWriteNchars(charPos, tempptr, sourceptr))
         {
             printf("Char pos too big.\n");
+            fclose(tempptr);
+            fclose(sourceptr);
+            remove(TEMP_ADDRESS);
             return false;
         }
     }
@@ -512,12 +557,18 @@ bool removeText(char *fileName, int linePos, int charPos, int seekPos, int size,
         if (!readAndWriteNlines(linePos, tempptr, sourceptr))
         {
             printf("Line pos too big.\n");
+            fclose(tempptr);
+            fclose(sourceptr);
+            remove(TEMP_ADDRESS);
             return false;
         }
         // writing first chars in the line
         if (!readAndWriteNchars(charPos, tempptr, sourceptr))
         {
             printf("Char pos too big.\n");
+            fclose(tempptr);
+            fclose(sourceptr);
+            remove(TEMP_ADDRESS);
             return false;
         }
     }
@@ -538,7 +589,7 @@ bool removeText(char *fileName, int linePos, int charPos, int seekPos, int size,
     return true;
 }
 
-void grep(char (*paths)[MAX_PATH_LENGTH], char *toBeFound, bool lMode, bool cMode)
+void grep(char (*paths)[MAX_PATH], char *toBeFound, bool lMode, bool cMode)
 {
     if (lMode && cMode)
     {
@@ -732,6 +783,25 @@ bool replaceAt(char *fileName, char *fileString, char *toBeFound, char *toBeRepl
     return true;
 }
 
+bool undo(char *fileName)
+{
+    char undoPath[MAX_PATH];
+    generateUndoPath(undoPath, fileName, getLastUndoNumber(fileName) - 1);
+    if (access(undoPath, F_OK) != 0)
+        return false;
+    if (remove(fileName) != 0)
+    {
+        printf("Can't remove the file\n");
+        return false;
+    }
+    if (rename(undoPath, fileName) != 0)
+    {
+        printf("Can't rename the backup file\n");
+        return false;
+    }
+    return true;
+}
+
 bool copyFileContentToClipboard(char *fileName, int linePos, int charPos, int size, bool isForward)
 {
     FILE *sourceptr = fopen(fileName, "r");
@@ -800,16 +870,17 @@ void retrieveStrFromClipboard(char *str)
 
 void deleteLastBackup(const char *fileName)
 {
-    char undoPath[MAX_PATH_LENGTH];
+    char undoPath[MAX_PATH];
     generateUndoPath(undoPath, fileName, getLastUndoNumber(fileName) - 1);
     remove(undoPath);
 }
 
 void backupForUndo(const char *fileName)
 {
-    char undoPath[MAX_PATH_LENGTH];
+    char undoPath[MAX_PATH];
     generateUndoPath(undoPath, fileName, getLastUndoNumber(fileName));
     copyFile(fileName, undoPath);
+    makeFileHidden(undoPath);
 }
 
 int getLastUndoNumber(const char *fileName)
@@ -817,9 +888,8 @@ int getLastUndoNumber(const char *fileName)
     int num = 1;
     for (; num < 100; num++)
     {
-        char undoPath[MAX_PATH_LENGTH];
+        char undoPath[MAX_PATH];
         generateUndoPath(undoPath, fileName, num);
-        printf("%s\n", undoPath);
         if (access(undoPath, F_OK) != 0)
             return num;
     }
@@ -828,7 +898,7 @@ int getLastUndoNumber(const char *fileName)
 
 void generateUndoPath(char *undoPath, const char *fileName, int num)
 {
-    undoPath = "";
+    strcpy(undoPath, "");
     num %= 100;
     char *lastSlashPointer = strrchr(fileName, '/');
     int lastSlashIndex = -1;
@@ -839,7 +909,7 @@ void generateUndoPath(char *undoPath, const char *fileName, int num)
     }
     strcat(undoPath, UNDO_SUFFIX);
     strcat(undoPath, "_");
-    char pureFileName[MAX_PATH_LENGTH];
+    char pureFileName[MAX_PATH];
     copyStringRange(pureFileName, fileName, lastSlashIndex + 1, -1);
     strcat(undoPath, pureFileName);
     strcat(undoPath, "_");
@@ -900,7 +970,7 @@ void handleNewlines(char *str)
     }
 }
 
-void splitPaths(const char *str, char (*paths)[MAX_PATH_LENGTH])
+void splitPaths(const char *str, char (*paths)[MAX_PATH])
 {
     int pathStartIndex = 0, pathEndIndex, pathsIndex = 0;
     char c;
@@ -1112,7 +1182,7 @@ bool createFile(const char *fileName)
 
 void createAllDirs(const char *dirName)
 {
-    char pathToMake[MAX_PATH_LENGTH];
+    char pathToMake[MAX_PATH];
     for (int i = 0; dirName[i] != '\0'; i++)
     {
         if (dirName[i] == '/')
@@ -1131,6 +1201,13 @@ bool directoryExists(const char *path)
     if (stat(path, &stats) == 0 && S_ISDIR(stats.st_mode))
         return 1;
     return 0;
+}
+
+void makeFileHidden(const char *fileName)
+{
+    DWORD dwattrs = GetFileAttributes(fileName);
+    if ((dwattrs & FILE_ATTRIBUTE_HIDDEN) == 0)
+        SetFileAttributes(fileName, dwattrs | FILE_ATTRIBUTE_HIDDEN);
 }
 
 void inputLine(char *str)
