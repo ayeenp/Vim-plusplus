@@ -21,8 +21,11 @@
 #define CMD_CUT 3
 
 void run();
+void quit();
 void cmdCreatefile(char *input);
 void cmdGrep(char *input);
+void cmdTree(char *input);
+void cmdCompare(char *input);
 void cmdInsert(char *input);
 void cmdRemCopyCut(char *input, int mode);
 void cmdUndo(char *input);
@@ -31,6 +34,8 @@ void cmdReplace(char *input);
 void cmdPaste(char *input);
 void cmdCat(char *input);
 bool cat(char *fileName);
+void showTree(const char *dirName, int depth, int maxDepth);
+void compare(char *fileName1, char *fileName2);
 bool insertText(char *fileName, char *text, int linePos, int charPos, int seekPos);
 bool removeText(char *fileName, int linePos, int charPos, int seekPos, int size, bool isForward);
 void grep(char (*paths)[MAX_PATH], char *toBeFound, bool lMode, bool cMode);
@@ -45,6 +50,7 @@ bool cutFileContentToClipboard(char *fileName, int linePos, int charPos, int siz
 bool pasteFromClipboard(char *fileName, int linePos, int charPos);
 void copyStrToClipboard(const char *str);
 void retrieveStrFromClipboard(char *str);
+void deleteAllBackups(const char *dirName);
 void deleteLastBackup(const char *fileName);
 void backupForUndo(const char *fileName);
 int getLastUndoNumber(const char *fileName);
@@ -64,6 +70,8 @@ bool createFile(const char *fileName);
 void createAllDirs(const char *dirName);
 bool directoryExists(const char *path);
 void makeFileHidden(const char *fileName);
+void printTreeItem(const char *path, int depth);
+void printCompareComplex(const char *line, int wordStart, int wordEnd);
 void inputLine(char *str);
 void inputLineFromFile(FILE *fp, char *str);
 void fileToString(FILE *fp, char *str);
@@ -90,7 +98,10 @@ void run()
         inputLine(input);
         copyNthWord(command, input, 1);
         if (strcmp(command, "quit") == 0)
+        {
+            quit();
             break;
+        }
         else if (strcmp(command, "createfile") == 0)
             cmdCreatefile(input);
         else if (strcmp(command, "insertstr") == 0)
@@ -111,6 +122,10 @@ void run()
             cmdReplace(input);
         else if (strcmp(command, "grep") == 0)
             cmdGrep(input);
+        else if (strcmp(command, "tree") == 0)
+            cmdTree(input);
+        else if (strcmp(command, "compare") == 0)
+            cmdCompare(input);
         else if (strcmp(command, "cat") == 0)
             cmdCat(input);
     }
@@ -119,6 +134,7 @@ void run()
 
 void quit()
 {
+    deleteAllBackups("root/");
 }
 
 void cmdCreatefile(char *input)
@@ -168,6 +184,35 @@ void cmdGrep(char *input)
     splitPaths(pathsString, paths);
     grep(paths, textToBeFound, lMode, cMode);
     free(paths);
+}
+
+void cmdTree(char *input)
+{
+    int depth;
+    if (sscanf(input, "tree %d", &depth) != 1)
+    {
+        printf("Type the depth properly after -pos\n");
+        return;
+    }
+    if (depth < -1)
+    {
+        printf("Depth can't be smaller than -1\n");
+        return;
+    }
+    showTree("root/", 1, depth);
+}
+
+void cmdCompare(char *input)
+{
+    char(*paths)[MAX_PATH] = (char(*)[MAX_PATH])calloc(3, sizeof(char[MAX_PATH]));
+    char pathsString[MAX_CMD_LINE_LENGTH];
+    splitPaths(input, paths);
+    if(paths[1][0] == '\0' || paths[2][0] == '\0')
+    {
+        printf("Please input the paths properly\n");
+        return;
+    }
+    compare(paths[1], paths[2]);
 }
 
 void cmdInsert(char *input)
@@ -263,7 +308,7 @@ void cmdRemCopyCut(char *input, int mode)
         break;
     case CMD_CUT:
         backupForUndo(path);
-        if(!cutFileContentToClipboard(path, linePos, charPos, size, isForward))
+        if (!cutFileContentToClipboard(path, linePos, charPos, size, isForward))
             deleteLastBackup(path);
         break;
     }
@@ -404,7 +449,7 @@ void cmdReplace(char *input)
     }
     fixPathString(path);
     backupForUndo(path);
-    if(!replace(path, textToBeFound, textToBeReplaced, at, isAll))
+    if (!replace(path, textToBeFound, textToBeReplaced, at, isAll))
         deleteLastBackup(path);
 }
 
@@ -435,7 +480,7 @@ void cmdPaste(char *input)
     }
     fixPathString(path);
     backupForUndo(path);
-    if(!pasteFromClipboard(path, linePos, charPos))
+    if (!pasteFromClipboard(path, linePos, charPos))
         deleteLastBackup(path);
 }
 
@@ -489,6 +534,150 @@ bool cat(char *fileName)
     return true;
 }
 
+void showTree(const char *dirName, int depth, int maxDepth)
+{
+    if (depth == maxDepth + 1)
+        return;
+    DIR *dp = opendir(dirName);
+    if (dp == NULL)
+    {
+        printf("Directory doesn't exist\n");
+        return;
+    }
+    struct dirent *dir;
+    while ((dir = readdir(dp)) != NULL)
+    {
+        if (dir->d_type != DT_DIR)
+        {
+            printTreeItem(dir->d_name, depth);
+        }
+        else if (dir->d_type == DT_DIR && strcmp(dir->d_name, ".") != 0 && strcmp(dir->d_name, "..") != 0)
+        {
+            printTreeItem(dir->d_name, depth);
+            char dPath[MAX_PATH];
+            strcpy(dPath, "");
+            sprintf(dPath, "%s/%s", dirName, dir->d_name);
+            showTree(dPath, depth + 1, maxDepth);
+        }
+    }
+}
+
+void compare(char *fileName1, char *fileName2)
+{
+    FILE *fp1;
+    fp1 = fopen(fileName1, "r");
+    if (fp1 == NULL)
+    {
+        printf("File %s doesn't exist\n", fileName1);
+        return;
+    }
+    FILE *fp2;
+    fp2 = fopen(fileName2, "r");
+    if (fp2 == NULL)
+    {
+        printf("File %s doesn't exist\n", fileName1);
+        return;
+    }
+    int checkedLineCounter = 0;
+    char f1Line[MAX_FILE_LINE_LENGTH];
+    char f2Line[MAX_FILE_LINE_LENGTH];
+    while (!feof(fp1) && !feof(fp2))
+    {
+        checkedLineCounter++;
+        inputLineFromFile(fp1, f1Line);
+        inputLineFromFile(fp2, f2Line);
+        if (strcmp(f1Line, f2Line) == 0)
+            continue;
+        int wordDifferCount = 0, finals1, finals2, finale1, finale2;
+        for (int word = 1; 1; word++)
+        {
+            int s1, s2, e1, e2;
+            bool line1state = findNthWord(f1Line, word, &s1, &e1);
+            bool line2state = findNthWord(f2Line, word, &s2, &e2);
+            if (!line1state && !line2state)
+                break;
+            else if ((line1state && !line2state) || (!line1state && line2state))
+            {
+                // Cancel the compare complex
+                wordDifferCount += 10;
+                break;
+            }
+            if (e2 - s2 != e1 - s1)
+            {
+                wordDifferCount++;
+                finals1 = s1;
+                finals2 = s2;
+                finale1 = e1;
+                finale2 = e2;
+            }
+            else
+            {
+                for (int i = 0; i < e1 - s1; i++)
+                {
+                    if (f1Line[s1 + i] != f2Line[s2 + i])
+                    {
+                        finals1 = s1;
+                        finals2 = s2;
+                        finale1 = e1;
+                        finale2 = e2;
+                        wordDifferCount++;
+                        break;
+                    }
+                }
+            }
+            if (wordDifferCount > 1)
+                break;
+        }
+        printf("========= #%d =========\n", checkedLineCounter);
+        if (wordDifferCount == 1)
+        {
+            printCompareComplex(f1Line, finals1, finale1);
+            printCompareComplex(f2Line, finals2, finale2);
+        }
+        else
+        {
+            printf("%s\n", f1Line);
+            printf("%s\n", f2Line);
+        }
+    }
+    if (!feof(fp1))
+    {
+        long int currentPos = ftell(fp1);
+        int newLineCounter = 0;
+        while (!feof(fp1))
+        {
+            if (fgetc(fp1) == '\n')
+                newLineCounter++;
+        }
+        printf(">>>>>>>>>> File 1 | #%d-#%d <<<<<<<<<<\n", checkedLineCounter + 1, checkedLineCounter + newLineCounter + 1);
+        fseek(fp1, currentPos, SEEK_SET);
+        while (!feof(fp1))
+        {
+            inputLineFromFile(fp1, f1Line);
+            printf("%s\n");
+        }
+    }
+    if (!feof(fp2))
+    {
+        long int currentPos = ftell(fp2);
+        int newLineCounter = 0;
+        while (!feof(fp2))
+        {
+            if (fgetc(fp2) == '\n')
+                newLineCounter++;
+        }
+        printf(">>>>>>>>>> File 2 | #%d-#%d <<<<<<<<<<\n", checkedLineCounter, newLineCounter + 1);
+        fseek(fp2, currentPos, SEEK_SET);
+        while (!feof(fp2))
+        {
+            inputLineFromFile(fp2, f2Line);
+            printf("%s\n");
+        }
+    }
+    fclose(fp1);
+    fclose(fp2);
+}
+
 bool insertText(char *fileName, char *text, int linePos, int charPos, int seekPos)
 {
     FILE *sourceptr = fopen(fileName, "r");
@@ -503,7 +692,7 @@ bool insertText(char *fileName, char *text, int linePos, int charPos, int seekPo
         // writing first lines
         if (!readAndWriteNlines(linePos, tempptr, sourceptr))
         {
-            printf("Line pos too big.\n");
+            printf("Line pos too big\n");
             fclose(tempptr);
             fclose(sourceptr);
             remove(TEMP_ADDRESS);
@@ -512,7 +701,7 @@ bool insertText(char *fileName, char *text, int linePos, int charPos, int seekPo
         // writing first chars in the line
         if (!readAndWriteNchars(charPos, tempptr, sourceptr))
         {
-            printf("Char pos too big.\n");
+            printf("Char pos too big\n");
             fclose(tempptr);
             fclose(sourceptr);
             remove(TEMP_ADDRESS);
@@ -556,7 +745,7 @@ bool removeText(char *fileName, int linePos, int charPos, int seekPos, int size,
         // writing first lines
         if (!readAndWriteNlines(linePos, tempptr, sourceptr))
         {
-            printf("Line pos too big.\n");
+            printf("Line pos too big\n");
             fclose(tempptr);
             fclose(sourceptr);
             remove(TEMP_ADDRESS);
@@ -565,7 +754,7 @@ bool removeText(char *fileName, int linePos, int charPos, int seekPos, int size,
         // writing first chars in the line
         if (!readAndWriteNchars(charPos, tempptr, sourceptr))
         {
-            printf("Char pos too big.\n");
+            printf("Char pos too big\n");
             fclose(tempptr);
             fclose(sourceptr);
             remove(TEMP_ADDRESS);
@@ -605,7 +794,7 @@ void grep(char (*paths)[MAX_PATH], char *toBeFound, bool lMode, bool cMode)
         if (fp == NULL)
         {
             printf("File %s doesn't exist\n", paths[fileIndex]);
-            return;
+            continue;
         }
         while (!feof(fp))
         {
@@ -627,6 +816,7 @@ void grep(char (*paths)[MAX_PATH], char *toBeFound, bool lMode, bool cMode)
         }
         if (lMode && foundAMatch)
             printf("%s\n", paths[fileIndex]);
+        fclose(fp);
     }
     if (cMode)
         printf("%d\n", matchesFound);
@@ -866,6 +1056,27 @@ void retrieveStrFromClipboard(char *str)
     strcpy(str, pchData);
     GlobalUnlock(hClipboardData);
     CloseClipboard();
+}
+
+void deleteAllBackups(const char *dirName)
+{
+    DIR *dp = opendir(dirName);
+    if (dp == NULL)
+    {
+        printf("Directory to delete all backups doesn't exist\n");
+        return;
+    }
+    struct dirent *dir;
+    while ((dir = readdir(dp)) != NULL)
+    {
+        char dPath[MAX_PATH];
+        strcpy(dPath, "");
+        sprintf(dPath, "%s/%s", dirName, dir->d_name);
+        if (dir->d_type != DT_DIR && strncmp(dir->d_name, UNDO_SUFFIX, strlen(UNDO_SUFFIX)) == 0)
+            remove(dPath);
+        else if (dir->d_type == DT_DIR && strcmp(dir->d_name, ".") != 0 && strcmp(dir->d_name, "..") != 0)
+            deleteAllBackups(dPath);
+    }
 }
 
 void deleteLastBackup(const char *fileName)
@@ -1208,6 +1419,29 @@ void makeFileHidden(const char *fileName)
     DWORD dwattrs = GetFileAttributes(fileName);
     if ((dwattrs & FILE_ATTRIBUTE_HIDDEN) == 0)
         SetFileAttributes(fileName, dwattrs | FILE_ATTRIBUTE_HIDDEN);
+}
+
+void printTreeItem(const char *path, int depth)
+{
+    depth -= 1;
+    for (int i = 0; i < 4 * (depth - 1); i++)
+        printf(" ");
+    if (depth != 0)
+        printf("L___");
+    printf("%s\n", path);
+}
+
+void printCompareComplex(const char *line, int wordStart, int wordEnd)
+{
+    for (int i = 0; i < wordStart; i++)
+        printf("%c", line[i]);
+    printf(">>");
+    for (int i = wordStart; i <= wordEnd; i++)
+        printf("%c", line[i]);
+    printf("<<");
+    for (int i = wordEnd + 1; line[i] != '\0'; i++)
+        printf("%c", line[i]);
+    printf("\n");
 }
 
 void inputLine(char *str)
