@@ -9,6 +9,7 @@
 #include <windows.h>
 #include <dirent.h>
 
+#define MAX_BRACKET_COUNT 1000
 #define MAX_CMD_LINE_LENGTH 400
 #define MAX_GREP_FILECOUNT 50
 #define MAX_STREAM_LENGTH 50000
@@ -19,6 +20,7 @@
 #define CMD_REM 1
 #define CMD_COPY 2
 #define CMD_CUT 3
+#define NOT_IN_BRACKET_RANGE -1
 
 void run();
 void quit();
@@ -29,6 +31,7 @@ void cmdCompare(char *input);
 void cmdInsert(char *input);
 void cmdRemCopyCut(char *input, int mode);
 void cmdUndo(char *input);
+void cmdAutoIndent(char *input);
 void cmdFind(char *input);
 void cmdReplace(char *input);
 void cmdPaste(char *input);
@@ -45,11 +48,16 @@ int findAt(const char *fileString, char *toBeFound, int at, bool isByWord, int *
 bool replace(char *fileName, char *toBeFound, char *toBeReplaced, int at, bool isAll);
 bool replaceAt(char *fileName, char *fileString, char *toBeFound, char *toBeReplaced, int at);
 bool undo(char *fileName);
+bool autoIndent(char *fileName);
+void bracketsAutoIndent(char *text, int leadingSpaceCount);
 bool copyFileContentToClipboard(char *fileName, int linePos, int charPos, int size, bool isForward);
 bool cutFileContentToClipboard(char *fileName, int linePos, int charPos, int size, bool isForward);
 bool pasteFromClipboard(char *fileName, int linePos, int charPos);
 void copyStrToClipboard(const char *str);
 void retrieveStrFromClipboard(char *str);
+void autoIndentInitialize(char *text);
+void fillBracketsArray(const char *text, int (*brackets)[2]);
+int findBracketRange(int index, const int (*brackets)[2]);
 void deleteAllBackups(const char *dirName);
 void deleteLastBackup(const char *fileName);
 void backupForUndo(const char *fileName);
@@ -70,6 +78,7 @@ bool createFile(const char *fileName);
 void createAllDirs(const char *dirName);
 bool directoryExists(const char *path);
 void makeFileHidden(const char *fileName);
+void makeFileNotHidden(const char *fileName);
 void printTreeItem(const char *path, int depth);
 void printCompareComplex(const char *line, int wordStart, int wordEnd);
 void inputLine(char *str);
@@ -126,6 +135,8 @@ void run()
             cmdTree(input);
         else if (strcmp(command, "compare") == 0)
             cmdCompare(input);
+        else if (strcmp(command, "auto-indent") == 0)
+            cmdAutoIndent(input);
         else if (strcmp(command, "cat") == 0)
             cmdCat(input);
     }
@@ -207,7 +218,7 @@ void cmdCompare(char *input)
     char(*paths)[MAX_PATH] = (char(*)[MAX_PATH])calloc(3, sizeof(char[MAX_PATH]));
     char pathsString[MAX_CMD_LINE_LENGTH];
     splitPaths(input, paths);
-    if(paths[1][0] == '\0' || paths[2][0] == '\0')
+    if (paths[1][0] == '\0' || paths[2][0] == '\0')
     {
         printf("Please input the paths properly\n");
         return;
@@ -331,6 +342,26 @@ void cmdUndo(char *input)
     }
     fixPathString(fileName);
     undo(fileName);
+}
+
+void cmdAutoIndent(char *input)
+{
+    int arg1index = findMatchingWord(input, "auto-indent");
+    if (arg1index == -1)
+    {
+        return;
+    }
+    char fileName[MAX_PATH];
+    copyStringRange(fileName, input, arg1index + 1, -1);
+    if (!handleDoubleQuotation(fileName))
+    {
+        printf("Invalid path input\n");
+        return;
+    }
+    fixPathString(fileName);
+    backupForUndo(fileName);
+    if (!autoIndent(fileName))
+        deleteLastBackup(fileName);
 }
 
 void cmdFind(char *input)
@@ -547,10 +578,8 @@ void showTree(const char *dirName, int depth, int maxDepth)
     struct dirent *dir;
     while ((dir = readdir(dp)) != NULL)
     {
-        if (dir->d_type != DT_DIR)
-        {
+        if (dir->d_type != DT_DIR && strncmp(dir->d_name, UNDO_SUFFIX, strlen(UNDO_SUFFIX)) != 0)
             printTreeItem(dir->d_name, depth);
-        }
         else if (dir->d_type == DT_DIR && strcmp(dir->d_name, ".") != 0 && strcmp(dir->d_name, "..") != 0)
         {
             printTreeItem(dir->d_name, depth);
@@ -989,7 +1018,129 @@ bool undo(char *fileName)
         printf("Can't rename the backup file\n");
         return false;
     }
+    makeFileNotHidden(fileName);
     return true;
+}
+
+bool autoIndent(char *fileName)
+{
+    FILE *fp;
+    fp = fopen(fileName, "r");
+    if (fp == NULL)
+    {
+        printf("Error occured while reading the file\n");
+        return false;
+    }
+    FILE *fptmp;
+    fptmp = fopen(TEMP_ADDRESS, "w");
+    char *textCopy = (char *)calloc(MAX_STREAM_LENGTH, sizeof(char));
+    fileToString(fp, textCopy);
+    fclose(fp);
+    autoIndentInitialize(textCopy);
+    char *text = (char *)calloc(MAX_STREAM_LENGTH, sizeof(char));
+    int(*brackets)[2] = (int(*)[2])calloc(MAX_BRACKET_COUNT, sizeof(int[2]));
+    int bracketDifference = 0, currentBracketsIndex = 0;
+    for (int i = 0; textCopy[i] != '\0'; i++)
+    {
+        if (textCopy[i] == '{')
+        {
+            bracketDifference++;
+            if (bracketDifference == 1)
+                brackets[currentBracketsIndex][0] = i;
+        }
+        if (textCopy[i] == '}')
+        {
+            bracketDifference--;
+            if (bracketDifference == 0)
+            {
+                brackets[currentBracketsIndex][1] = i;
+                currentBracketsIndex++;
+            }
+        }
+    }
+
+    int length;
+    for (int index = 0; textCopy[index] != '\0'; index++)
+    {
+        length = strlen(text);
+        int currentBracket = findBracketRange(index, brackets);
+        if (currentBracket == NOT_IN_BRACKET_RANGE)
+        {
+            text[length++] = textCopy[index];
+            text[length] = '\0';
+            continue;
+        }
+        char *bracketText = (char *)calloc(MAX_STREAM_LENGTH, sizeof(char));
+        copyStringRange(bracketText, textCopy, brackets[currentBracket][0], brackets[currentBracket][1] + 1);
+        bracketsAutoIndent(bracketText, 0);
+        strcat(text, bracketText);
+        free(bracketText);
+        index = brackets[currentBracket][1];
+    }
+    free(textCopy);
+    // for (int i = 0; text[i] != '\0'; i++)
+    // {
+    fprintf(fptmp, "%s", text);
+    // }
+    fclose(fptmp);
+    if (remove(fileName) != 0)
+    {
+        printf("Couldn't compelete the autoindent (can't remove the source file)\n");
+        return false;
+    }
+    if (rename(TEMP_ADDRESS, fileName) != 0)
+    {
+        printf("Couldn't compelete the autoindent (can't rename the temp file)\n");
+        return false;
+    }
+    return true;
+}
+
+void bracketsAutoIndent(char *text, int leadingSpaceCount)
+{
+    char *textCopy = (char *)calloc(MAX_STREAM_LENGTH, sizeof(char));
+    strcpy(textCopy, text);
+    strcpy(text, "");
+    int(*brackets)[2] = (int(*)[2])calloc(MAX_BRACKET_COUNT, sizeof(int[2]));
+    fillBracketsArray(textCopy, brackets);
+    int length = 0;
+    text[length++] = '{';
+    text[length++] = '\n';
+    for (int i = 0; i < leadingSpaceCount + 4; i++)
+        text[length++] = ' ';
+    text[length] = '\0';
+    for (int index = 1; textCopy[index + 1] != '\0'; index++)
+    {
+        length = strlen(text);
+        if (textCopy[index - 1] == '}')
+            for (int i = 0; i < leadingSpaceCount + 4; i++)
+                text[length++] = ' ';
+        int currentBracket = findBracketRange(index, brackets);
+        if (currentBracket == NOT_IN_BRACKET_RANGE)
+        {
+            text[length++] = textCopy[index];
+            if (textCopy[index] == '\n')
+                for (int i = 0; i < leadingSpaceCount + 4; i++)
+                    text[length++] = ' ';
+            text[length] = '\0';
+            continue;
+        }
+        char *bracketText = (char *)calloc(MAX_STREAM_LENGTH, sizeof(char));
+        copyStringRange(bracketText, textCopy, brackets[currentBracket][0], brackets[currentBracket][1] + 1);
+        bracketsAutoIndent(bracketText, leadingSpaceCount + 4);
+        strcat(text, bracketText);
+        free(bracketText);
+        index = brackets[currentBracket][1];
+    }
+    length = strlen(text);
+    if (textCopy[strlen(textCopy) - 2] != '}')
+        text[length++] = '\n';
+    for (int i = 0; i < leadingSpaceCount; i++)
+        text[length++] = ' ';
+    text[length++] = '}';
+    text[length++] = '\n';
+    text[length] = '\0';
+    free(textCopy);
 }
 
 bool copyFileContentToClipboard(char *fileName, int linePos, int charPos, int size, bool isForward)
@@ -1056,6 +1207,92 @@ void retrieveStrFromClipboard(char *str)
     strcpy(str, pchData);
     GlobalUnlock(hClipboardData);
     CloseClipboard();
+}
+
+void autoIndentInitialize(char *text)
+{
+    char textCopy[MAX_STREAM_LENGTH];
+    strcpy(textCopy, text);
+    strcpy(text, "");
+    int lastCopiedIndex = -1;
+
+    for (int mainIterator = 0; textCopy[mainIterator] != '\0'; mainIterator++)
+    {
+        if (textCopy[mainIterator] == '{' || textCopy[mainIterator] == '}')
+        {
+            // before the { or }
+            if (mainIterator != 0)
+            {
+                bool foundNonWhiteChar = false;
+                int lastNonWhiteChar;
+                for (lastNonWhiteChar = mainIterator - 1; lastNonWhiteChar >= 0; lastNonWhiteChar--)
+                {
+                    if (textCopy[lastNonWhiteChar] == '{' || textCopy[lastNonWhiteChar] == '}')
+                        break;
+                    if (textCopy[lastNonWhiteChar] != '\n' && textCopy[lastNonWhiteChar] != '\t' && textCopy[lastNonWhiteChar] != ' ')
+                    {
+                        foundNonWhiteChar = true;
+                        break;
+                    }
+                }
+                char *tempText = (char *)calloc(MAX_STREAM_LENGTH, sizeof(char));
+                copyStringRange(tempText, textCopy, lastCopiedIndex + 1, lastNonWhiteChar + 1);
+                strcat(text, tempText);
+                free(tempText);
+                if (foundNonWhiteChar && textCopy[mainIterator] == '{')
+                    strcat(text, " ");
+            }
+            int length = strlen(text);
+            text[length] = textCopy[mainIterator];
+            text[length + 1] = '\0';
+
+            // after the { or }
+            int nextNonWhiteChar;
+            for (nextNonWhiteChar = mainIterator + 1; textCopy[nextNonWhiteChar] != '\0'; nextNonWhiteChar++)
+            {
+                if (textCopy[nextNonWhiteChar] == '{' || textCopy[nextNonWhiteChar] == '}')
+                    break;
+                if (textCopy[nextNonWhiteChar] != '\n' && textCopy[nextNonWhiteChar] != '\t' && textCopy[nextNonWhiteChar] != ' ')
+                    break;
+            }
+            lastCopiedIndex = nextNonWhiteChar - 1;
+        }
+    }
+    char *tempText = (char *)calloc(MAX_STREAM_LENGTH, sizeof(char));
+    copyStringRange(tempText, textCopy, lastCopiedIndex + 1, -1);
+    strcat(text, tempText);
+    free(tempText);
+}
+
+void fillBracketsArray(const char *text, int (*brackets)[2])
+{
+    int bracketDifference = 0, currentBracketsIndex = 0;
+    for (int i = 0; text[i] != '\0'; i++)
+    {
+        if (text[i] == '{')
+        {
+            bracketDifference++;
+            if (bracketDifference == 2)
+                brackets[currentBracketsIndex][0] = i;
+        }
+        if (text[i] == '}')
+        {
+            bracketDifference--;
+            if (bracketDifference == 1)
+            {
+                brackets[currentBracketsIndex][1] = i;
+                currentBracketsIndex++;
+            }
+        }
+    }
+}
+
+int findBracketRange(int index, const int (*brackets)[2])
+{
+    for (int i = 0; brackets[i][1] != 0; i++)
+        if (index == brackets[i][0])
+            return i;
+    return NOT_IN_BRACKET_RANGE;
 }
 
 void deleteAllBackups(const char *dirName)
@@ -1421,6 +1658,13 @@ void makeFileHidden(const char *fileName)
         SetFileAttributes(fileName, dwattrs | FILE_ATTRIBUTE_HIDDEN);
 }
 
+void makeFileNotHidden(const char *fileName)
+{
+    DWORD dwattrs = GetFileAttributes(fileName);
+    if ((dwattrs & FILE_ATTRIBUTE_HIDDEN) == FILE_ATTRIBUTE_HIDDEN)
+        SetFileAttributes(fileName, dwattrs & (~FILE_ATTRIBUTE_HIDDEN));
+}
+
 void printTreeItem(const char *path, int depth)
 {
     depth -= 1;
@@ -1551,10 +1795,7 @@ void copyStringRange(char *dest, const char *source, int start, int end)
     if (end == -1)
         end = MAX_STREAM_LENGTH;
     if (start >= end)
-    {
-        printf("copyStringRange start greater than end\n");
         return;
-    }
     int destIndex = 0;
     for (int i = start; i < end && source[i] != '\0'; i++)
         dest[destIndex++] = source[i];
